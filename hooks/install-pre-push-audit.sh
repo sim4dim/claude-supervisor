@@ -17,8 +17,9 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
-# Path to the source hook file
-HOOK_SOURCE="simon//$HOME//simon/projects/claude-supervisor/.claude/hooks/pre-push-audit.sh"
+# Path to the source hook file (relative to this script's location)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOK_SOURCE="$SCRIPT_DIR/pre-push-audit.sh"
 
 # Function to check if we're in a git repository
 check_git_repo() {

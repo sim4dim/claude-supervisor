@@ -7,8 +7,8 @@
 # Safe to re-run: updates supervisor-managed sections while preserving user edits.
 #
 # Examples:
-#   ./setup-project.sh simon//$HOME//simon/projects/hvac 3847 "HVAC automation engineer. Stack: Home Assistant, pyscript, Keen vents, GW1000 weather station"
-#   ./setup-project.sh simon//$HOME//simon/projects/av-remote 3847 "AVsimon//$HOME/ theater integration engineer. Stack: Python, Denon AVR, Sony Bravia, IR control"
+#   ./setup-project.sh $HOME/projects/hvac 3847 "HVAC automation engineer. Stack: Home Assistant, pyscript, Keen vents, GW1000 weather station"
+#   ./setup-project.sh $HOME/projects/av-remote 3847 "AV/home theater integration engineer. Stack: Python, Denon AVR, Sony Bravia, IR control"
 
 set -e
 
@@ -162,6 +162,18 @@ hooks = {
         "SessionStart": [
             {"matcher": "*", "hooks": [{"type": "command", "command": cmd("session-start.sh")}]},
         ],
+        "StopFailure": [
+            {"matcher": "", "hooks": [{"type": "command", "command": cmd("on-stop-failure.sh")}]},
+        ],
+        "PostCompact": [
+            {"matcher": "", "hooks": [{"type": "command", "command": cmd("post-compact.sh")}]},
+        ],
+        "TaskCreated": [
+            {"matcher": "*", "hooks": [{"type": "command", "command": cmd("task-created.sh")}]},
+        ],
+        # NOTE: statusline.sh and file-changed.sh do not correspond to standard Claude Code
+        # hook events. statusline.sh renders rate-limit gauges for a custom CLI display;
+        # file-changed.sh handles an editor-side file-watch event. Neither is wired here.
     }
 }
 
@@ -183,10 +195,10 @@ with open(settings_file, "w") as f:
 print(f"{action} {settings_file}")
 PYSCRIPT
 
-# Optional: grant additional users read/write access to the project directory
-# Uncomment and repeat for each user that needs access:
-# setfacl -R -m u:USERNAME:rwx "$PROJECT_DIR" 2>/dev/null || sudo setfacl -R -m u:USERNAME:rwx "$PROJECT_DIR" 2>/dev/null || true
-# setfacl -d -m u:USERNAME:rwx "$PROJECT_DIR" 2>/dev/null || sudo setfacl -d -m u:USERNAME:rwx "$PROJECT_DIR" 2>/dev/null || true
+# Optional: grant additional users read access
+# for user in user1 user2; do
+#   setfacl -R -m u:$user:rX "$PROJECT_DIR" || true
+# done
 
 echo ""
 echo "Done! Project set up for supervisor on port $PORT"

@@ -27,7 +27,7 @@ PROJECT_NAME=$(basename "$PROJECT_DIR")
 
 HOOKS_DIR="$PROJECT_DIR/.claude/hooks"
 if [ -d "$HOOKS_DIR" ]; then
-  for f in pre-tool-use.sh permission-request.sh post-tool-use.sh notification.sh on-stop.sh pre-compact.sh; do
+  for f in pre-tool-use.sh permission-request.sh post-tool-use.sh notification.sh on-stop.sh pre-compact.sh session-start.sh on-stop-failure.sh post-compact.sh task-created.sh statusline.sh dynamic-approvals.sh file-changed.sh; do
     if [ -f "$HOOKS_DIR/$f" ]; then
       rm "$HOOKS_DIR/$f"
     fi
@@ -78,9 +78,40 @@ fi
 
 CLAUDE_MD="$PROJECT_DIR/CLAUDE.md"
 if [ -f "$CLAUDE_MD" ]; then
-  if grep -q "## Critical: You Are a Coordinator, Not a Worker" "$CLAUDE_MD"; then
+  if grep -q "SUPERVISOR-START" "$CLAUDE_MD"; then
+    # New format: remove content between <!-- SUPERVISOR-START --> and <!-- SUPERVISOR-END -->
     python3 -c "
-import re
+import re, os
+
+with open('$CLAUDE_MD') as f:
+    content = f.read()
+
+# Remove everything between SUPERVISOR-START and SUPERVISOR-END markers (inclusive)
+pattern = r'\n?---\n+<!-- SUPERVISOR-START[^>]*-->.*?<!-- SUPERVISOR-END -->\n?'
+cleaned = re.sub(pattern, '', content, count=1, flags=re.DOTALL)
+
+# Also handle case where there's no leading --- (supervisor content at start of file)
+if cleaned == content:
+    pattern = r'<!-- SUPERVISOR-START[^>]*-->.*?<!-- SUPERVISOR-END -->\n?'
+    cleaned = re.sub(pattern, '', content, count=1, flags=re.DOTALL)
+
+if cleaned != content:
+    cleaned = cleaned.rstrip()
+    if cleaned:
+        cleaned += '\n'
+        with open('$CLAUDE_MD', 'w') as f:
+            f.write(cleaned)
+        print('[$PROJECT_NAME] Removed supervisor section from CLAUDE.md (preserved existing content)')
+    else:
+        os.remove('$CLAUDE_MD')
+        print('[$PROJECT_NAME] Removed CLAUDE.md (was entirely supervisor template)')
+else:
+    print('[$PROJECT_NAME] Could not isolate supervisor section in CLAUDE.md, leaving as-is')
+"
+  elif grep -q "## Critical: You Are a Coordinator, Not a Worker" "$CLAUDE_MD"; then
+    # Old format without markers
+    python3 -c "
+import re, os
 
 with open('$CLAUDE_MD') as f:
     content = f.read()
@@ -90,7 +121,6 @@ with open('$CLAUDE_MD') as f:
 
 # Pattern 1: Entire file is the supervisor template (starts with # Project Work Instructions)
 if content.strip().startswith('# Project Work Instructions'):
-    import os
     os.remove('$CLAUDE_MD')
     print('[$PROJECT_NAME] Removed CLAUDE.md (was entirely supervisor template)')
 else:

@@ -28,19 +28,19 @@ This hook provides an automated security layer for git repositories by:
 
 2. Run the installation script:
    ```bash
-   simon//$HOME//simon/projects/claude-supervisor/.claude/hooks/install-pre-push-audit.sh
+   $HOME/projects/claude-supervisor/.claude/hooks/install-pre-push-audit.sh
    ```
 
 3. Test the installation:
    ```bash
-   simon//$HOME//simon/projects/claude-supervisor/.claude/hooks/install-pre-push-audit.sh --test
+   $HOME/projects/claude-supervisor/.claude/hooks/install-pre-push-audit.sh --test
    ```
 
 ### Option 2: Manual Installation
 
 1. Copy the hook to your repository:
    ```bash
-   cp simon//$HOME//simon/projects/claude-supervisor/.claude/hooks/pre-push-audit.sh /path/to/your/repo/.git/hooks/pre-push
+   cp $HOME/projects/claude-supervisor/.claude/hooks/pre-push-audit.sh /path/to/your/repo/.git/hooks/pre-push
    ```
 
 2. Make it executable:
@@ -77,7 +77,7 @@ The `audit-public` skill checks for:
 
 **BLOCKER Issues** (blocks push):
 - Personal usernames and email domains
-- Real home paths (`simon//$HOME//simon`, `simon//$HOME//elena`)
+- Real home paths (`/home/<username>`)
 - Internal IP addresses (`192.168.x.x`, `10.x.x.x`)
 - Credential files (`.credentials.json`, files containing `SSHPASS`, `API_KEY`, `SECRET`)
 - Private project names
@@ -125,7 +125,7 @@ $ git push origin main
 [INFO] Running security audit before push to public repository...
 
 === AUDIT RESULTS ===
-🚫 BLOCKER: Personal username 'simon' found in config.yaml line 15
+🚫 BLOCKER: Personal username 'jdoe' found in config.yaml line 15
 🚫 BLOCKER: Internal IP address 'localhost0' found in deploy.sh line 23
 
 [ERROR] Security audit failed with exit code 1

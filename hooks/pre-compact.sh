@@ -122,7 +122,12 @@ if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
     # ─── Extract transcript excerpt ──────────────────────────────────────────
     EXCERPT="$CLAUDE_PROJECT_DIR/.claude/transcript-excerpt.md"
     if [[ -n "$SESSION_ID" ]] && [[ "$SESSION_ID" != "unknown" ]]; then
-        python3 "$HOME/.local/bin/extract-transcript" \
+        # Prefer the repo's own script; fall back to the user's local install
+        EXTRACT_SCRIPT="$(dirname "$(dirname "${BASH_SOURCE[0]}")")/scripts/extract-transcript.py"
+        if [[ ! -f "$EXTRACT_SCRIPT" ]]; then
+            EXTRACT_SCRIPT="$HOME/.local/bin/extract-transcript"
+        fi
+        python3 "$EXTRACT_SCRIPT" \
             "$SESSION_ID" "$CLAUDE_PROJECT_DIR" \
             > "$EXCERPT" 2>/dev/null || true
         # Remove if empty (script produced no output)

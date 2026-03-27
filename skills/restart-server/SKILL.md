@@ -37,12 +37,12 @@ Wait for their response. If they say no or anything other than yes/y, cancel and
 ## Step 5: Run the restart
 
 Determine the service name:
-- If `$SV_INSTANCE` is "user2" or the port is 3848, use `supervisor-user2`
-- Otherwise, use `supervisor-user1`
+- If `$SV_INSTANCE` matches a configured user, use the corresponding `supervisor-<user>` service
+- Otherwise, use `supervisor-<user>` (the default instance name for this install)
 
 First check if systemd is managing the service: `systemctl is-enabled <service-name>`.
 - If enabled: run `sudo systemctl restart <service-name>`
-- If not enabled (fallback): run the start script using absolute path `$HOME/projects/claude-supervisor/start-user1.sh` or `$HOME/projects/claude-supervisor/start-user2.sh`
+- If not enabled (fallback): run the start script using absolute path `$HOME/projects/claude-supervisor/start-<user>.sh`
 
 Note: `sudo` may be blocked by hooks. If so, tell the user to run the systemctl command manually in a separate terminal.
 

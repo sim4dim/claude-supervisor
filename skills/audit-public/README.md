@@ -35,12 +35,12 @@ The skill is automatically available as `/audit-public` when installed in the Cl
 ## What It Checks
 
 ### BLOCKER Issues (causes failure exit code)
-- Personal usernames: simon, elena, sdimenstein
-- Personal email domains: @hotmail, @sdimenstein
-- Real home paths: simon//$HOME//simon, simon//$HOME//elena (excluding variables)
+- Personal usernames: configure via ~/.claude/.audit-blocklist
+- Personal email domains: configure via ~/.claude/.audit-blocklist
+- Real home paths: /home/<username> (excluding variables)
 - Internal IP addresses: 192.168.x.x, 10.x.x.x, 172.16-31.x.x ranges
 - Credential files: .credentials.json, files containing SSHPASS, API_KEY, SECRET
-- Private project names: moremoney, infogenesis, f5-obi
+- Private project names: configure via ~/.claude/.audit-blocklist
 - Custom patterns from ~/.claude/.audit-blocklist
 
 ### IMPORTANT Issues (should review)
@@ -108,7 +108,7 @@ Issues found: 15
 
 BLOCKER ISSUES (3)
 These MUST be fixed before publishing publicly!
-  [PERSONAL_PATH] Hardcoded home path found: simon//$HOME//simon
+  [PERSONAL_PATH] Hardcoded home path found: /home/jdoe
     → setup.sh:15
   [INTERNAL_IP] Internal IP address found: localhost0
     → config/servers.json:8

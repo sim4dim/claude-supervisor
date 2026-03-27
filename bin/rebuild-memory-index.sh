@@ -2,8 +2,9 @@
 set -euo pipefail
 
 if [ -z "${1:-}" ]; then
-  echo "Usage: $0 <memory-dir>" >&2
-  echo "  e.g. $0 \$HOME/.claude/projects/-home-user-projects-claude-supervisor/memory" >&2
+  echo "Usage: $0 <memory-dir>"
+  echo "  memory-dir: Path to the project's memory directory"
+  echo "  Example: $0 \$HOME/.claude/projects/-home-user1-projects-claude-supervisor/memory"
   exit 1
 fi
 MEMORY_DIR="$1"

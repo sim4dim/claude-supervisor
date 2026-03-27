@@ -369,10 +369,10 @@ Spawn a `researcher` subagent with this prompt (substitute `$RUN_ID`):
 >
 > Find credential files:
 > ```bash
-> find simon//$HOME/ -name ".env" 2>/dev/null
-> find simon//$HOME/ -name "credentials.json" 2>/dev/null
-> find simon//$HOME/ -name "*.key" 2>/dev/null
-> find simon//$HOME/ -name "*.pem" 2>/dev/null
+> find "$HOME" -name ".env" 2>/dev/null
+> find "$HOME" -name "credentials.json" 2>/dev/null
+> find "$HOME" -name "*.key" 2>/dev/null
+> find "$HOME" -name "*.pem" 2>/dev/null
 > ```
 >
 > For each file found, check its permissions:
