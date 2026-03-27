@@ -1,0 +1,574 @@
+#!/usr/bin/env node
+
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+const glob = require('glob');
+
+// Color codes for output
+const colors = {
+    red: '\x1b[31m',
+    yellow: '\x1b[33m',
+    blue: '\x1b[34m',
+    green: '\x1b[32m',
+    reset: '\x1b[0m',
+    bold: '\x1b[1m'
+};
+
+class AuditReporter {
+    constructor(verbose = false) {
+        this.verbose = verbose;
+        this.issues = {
+            BLOCKER: [],
+            IMPORTANT: [],
+            MINOR: []
+        };
+        this.stats = {
+            filesScanned: 0,
+            patternsChecked: 0
+        };
+    }
+
+    addIssue(severity, category, message, file = null, line = null) {
+        this.issues[severity].push({
+            category,
+            message,
+            file,
+            line,
+            timestamp: new Date().toISOString()
+        });
+    }
+
+    log(message, color = 'reset') {
+        if (this.verbose) {
+            console.log(`${colors[color]}${message}${colors.reset}`);
+        }
+    }
+
+    generateReport() {
+        const totalIssues = Object.values(this.issues).reduce((sum, arr) => sum + arr.length, 0);
+
+        console.log(`${colors.bold}=== AUDIT REPORT ===${colors.reset}`);
+        console.log(`Files scanned: ${this.stats.filesScanned}`);
+        console.log(`Issues found: ${totalIssues}`);
+        console.log('');
+
+        // BLOCKER issues
+        if (this.issues.BLOCKER.length > 0) {
+            console.log(`${colors.red}${colors.bold}BLOCKER ISSUES (${this.issues.BLOCKER.length})${colors.reset}`);
+            console.log(`${colors.red}These MUST be fixed before publishing publicly!${colors.reset}`);
+            this.issues.BLOCKER.forEach(issue => {
+                console.log(`${colors.red}  [${issue.category}] ${issue.message}${colors.reset}`);
+                if (issue.file) {
+                    const location = issue.line ? `${issue.file}:${issue.line}` : issue.file;
+                    console.log(`${colors.red}    → ${location}${colors.reset}`);
+                }
+            });
+            console.log('');
+        }
+
+        // IMPORTANT issues
+        if (this.issues.IMPORTANT.length > 0) {
+            console.log(`${colors.yellow}${colors.bold}IMPORTANT ISSUES (${this.issues.IMPORTANT.length})${colors.reset}`);
+            console.log(`${colors.yellow}These should be reviewed before publishing${colors.reset}`);
+            this.issues.IMPORTANT.forEach(issue => {
+                console.log(`${colors.yellow}  [${issue.category}] ${issue.message}${colors.reset}`);
+                if (issue.file) {
+                    const location = issue.line ? `${issue.file}:${issue.line}` : issue.file;
+                    console.log(`${colors.yellow}    → ${location}${colors.reset}`);
+                }
+            });
+            console.log('');
+        }
+
+        // MINOR issues
+        if (this.issues.MINOR.length > 0) {
+            console.log(`${colors.blue}${colors.bold}MINOR ISSUES (${this.issues.MINOR.length})${colors.reset}`);
+            console.log(`${colors.blue}These are cleanup suggestions${colors.reset}`);
+            this.issues.MINOR.forEach(issue => {
+                console.log(`${colors.blue}  [${issue.category}] ${issue.message}${colors.reset}`);
+                if (issue.file) {
+                    const location = issue.line ? `${issue.file}:${issue.line}` : issue.file;
+                    console.log(`${colors.blue}    → ${location}${colors.reset}`);
+                }
+            });
+            console.log('');
+        }
+
+        // Summary
+        if (totalIssues === 0) {
+            console.log(`${colors.green}${colors.bold}✓ No issues found! Repository appears safe for public publishing.${colors.reset}`);
+            return 0;
+        } else {
+            console.log(`${colors.bold}SUMMARY:${colors.reset}`);
+            console.log(`  Blockers: ${this.issues.BLOCKER.length}`);
+            console.log(`  Important: ${this.issues.IMPORTANT.length}`);
+            console.log(`  Minor: ${this.issues.MINOR.length}`);
+
+            if (this.issues.BLOCKER.length > 0) {
+                console.log(`${colors.red}❌ AUDIT FAILED: Fix blocker issues before publishing${colors.reset}`);
+                return 1;
+            } else {
+                console.log(`${colors.yellow}⚠️  Review important issues before publishing${colors.reset}`);
+                return 0;
+            }
+        }
+    }
+}
+
+class PublicAudit {
+    constructor(repoPath, verbose = false) {
+        this.repoPath = path.resolve(repoPath);
+        this.reporter = new AuditReporter(verbose);
+        this.blocklist = this.loadBlocklist();
+    }
+
+    loadBlocklist() {
+        const blocklistPath = path.join(process.env.HOME, '.claude', '.audit-blocklist');
+        const defaults = [
+            // Usernames
+            'simon', 'elena', 'sdimenstein',
+            // Email domains
+            '@hotmail', '@sdimenstein',
+            // Private projects
+            'moremoney', 'infogenesis', 'f5-obi',
+            // Credential patterns
+            'SSHPASS=', 'API_KEY=', 'SECRET=', 'PASSWORD=',
+            '.credentials.json', 'id_rsa', 'id_ed25519'
+        ];
+
+        try {
+            if (fs.existsSync(blocklistPath)) {
+                const custom = fs.readFileSync(blocklistPath, 'utf8')
+                    .split('\n')
+                    .map(line => line.trim())
+                    .filter(line => line && !line.startsWith('#'));
+                return [...defaults, ...custom];
+            }
+        } catch (err) {
+            this.reporter.log(`Warning: Could not load blocklist: ${err.message}`, 'yellow');
+        }
+
+        return defaults;
+    }
+
+    async run() {
+        this.reporter.log(`Starting audit of ${this.repoPath}`, 'blue');
+
+        try {
+            await this.scanPersonalInfo();
+            await this.checkEnvVarConsistency();
+            await this.checkFileReferences();
+            await this.checkGitHistory();
+            await this.checkDocsConsistency();
+            await this.scanHardcodedPaths();
+        } catch (error) {
+            console.error(`${colors.red}Audit failed: ${error.message}${colors.reset}`);
+            return 1;
+        }
+
+        return this.reporter.generateReport();
+    }
+
+    async scanPersonalInfo() {
+        this.reporter.log('Scanning for personal info and sensitive data...', 'blue');
+
+        const files = await glob.glob('**/*', {
+            cwd: this.repoPath,
+            ignore: [
+                'node_modules/**',
+                '.git/**',
+                'dist/**',
+                'build/**',
+                '*.log',
+                '*.tmp',
+                // Skip audit tool files that contain examples
+                'skills/audit-public/**',
+                '**/audit-public/**'
+            ],
+            nodir: true
+        });
+
+        this.reporter.stats.filesScanned = files.length;
+
+        for (const file of files) {
+            const fullPath = path.join(this.repoPath, file);
+
+            try {
+                // Skip binary files
+                if (this.isBinaryFile(fullPath)) continue;
+
+                const content = fs.readFileSync(fullPath, 'utf8');
+                const lines = content.split('\n');
+
+                lines.forEach((line, index) => {
+                    const lineNum = index + 1;
+
+                    // Check for home paths (but not variables)
+                    const homeMatch = line.match(/\/home\/([^\/\s${}]+)/g);
+                    if (homeMatch) {
+                        homeMatch.forEach(match => {
+                            // Skip if it's clearly a variable like ${HOME} or $HOME
+                            if (!line.includes('${') && !line.includes('$HOME') && !line.includes('$(')) {
+                                this.reporter.addIssue('BLOCKER', 'PERSONAL_PATH',
+                                    `Hardcoded home path found: ${match}`, file, lineNum);
+                            }
+                        });
+                    }
+
+                    // Check for internal IP ranges (but not version numbers)
+                    const ipMatch = line.match(/(?:192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)\d{1,3}(?:\.\d{1,3})*/g);
+                    if (ipMatch) {
+                        ipMatch.forEach(ip => {
+                            // Skip if it looks like a version number (has more than 3 dots or very high numbers)
+                            const parts = ip.split('.');
+                            const isVersionNumber = parts.length > 4 ||
+                                parts.some(part => parseInt(part) > 255) ||
+                                (parts.length === 3 && parseInt(parts[2]) < 100 && parseInt(parts[1]) < 10);
+
+                            if (!isVersionNumber) {
+                                this.reporter.addIssue('BLOCKER', 'INTERNAL_IP',
+                                    `Internal IP address found: ${ip}`, file, lineNum);
+                            }
+                        });
+                    }
+
+                    // Check blocklist patterns
+                    this.blocklist.forEach(pattern => {
+                        if (line.toLowerCase().includes(pattern.toLowerCase())) {
+                            this.reporter.addIssue('BLOCKER', 'SENSITIVE_DATA',
+                                `Sensitive pattern found: ${pattern}`, file, lineNum);
+                        }
+                    });
+                });
+
+            } catch (err) {
+                this.reporter.log(`Warning: Could not read ${file}: ${err.message}`, 'yellow');
+            }
+        }
+    }
+
+    async checkEnvVarConsistency() {
+        this.reporter.log('Checking environment variable consistency...', 'blue');
+
+        const entryPoints = ['server.js', 'index.js', 'app.js', 'main.js'];
+        let entryPoint = null;
+
+        for (const ep of entryPoints) {
+            if (fs.existsSync(path.join(this.repoPath, ep))) {
+                entryPoint = ep;
+                break;
+            }
+        }
+
+        if (!entryPoint) {
+            this.reporter.log('No main entry point found, skipping env var check', 'blue');
+            return;
+        }
+
+        try {
+            const content = fs.readFileSync(path.join(this.repoPath, entryPoint), 'utf8');
+            const envVars = [...content.matchAll(/process\.env\.([A-Z_][A-Z0-9_]*)/g)]
+                .map(match => match[1])
+                .filter((v, i, arr) => arr.indexOf(v) === i); // unique
+
+            if (envVars.length === 0) return;
+
+            // Check README documentation
+            const readmePath = path.join(this.repoPath, 'README.md');
+            if (fs.existsSync(readmePath)) {
+                const readme = fs.readFileSync(readmePath, 'utf8');
+                envVars.forEach(envVar => {
+                    if (!readme.includes(envVar)) {
+                        this.reporter.addIssue('IMPORTANT', 'ENV_UNDOCUMENTED',
+                            `Environment variable ${envVar} used but not documented in README`, entryPoint);
+                    }
+                });
+            }
+
+            // Check .env.example
+            const envExamplePath = path.join(this.repoPath, '.env.example');
+            if (fs.existsSync(envExamplePath)) {
+                const envExample = fs.readFileSync(envExamplePath, 'utf8');
+                envVars.forEach(envVar => {
+                    if (!envExample.includes(envVar)) {
+                        this.reporter.addIssue('IMPORTANT', 'ENV_MISSING_EXAMPLE',
+                            `Environment variable ${envVar} missing from .env.example`, entryPoint);
+                    }
+                });
+            }
+
+        } catch (err) {
+            this.reporter.log(`Warning: Could not check env vars: ${err.message}`, 'yellow');
+        }
+    }
+
+    async checkFileReferences() {
+        this.reporter.log('Checking file references in documentation...', 'blue');
+
+        const docFiles = ['README.md', 'INSTALL.md', 'SETUP.md'];
+        const docDirs = await glob.glob('docs/**/*.md', { cwd: this.repoPath });
+
+        [...docFiles, ...docDirs].forEach(docFile => {
+            const fullPath = path.join(this.repoPath, docFile);
+            if (!fs.existsSync(fullPath)) return;
+
+            try {
+                const content = fs.readFileSync(fullPath, 'utf8');
+
+                // Check file references
+                const fileRefs = [...content.matchAll(/(?:^|\s)([^\s`]+\.(?:js|json|md|txt|sh|py|yml|yaml|config))(?:\s|$|`)/g)]
+                    .map(match => match[1]);
+
+                fileRefs.forEach(ref => {
+                    const refPath = path.join(this.repoPath, ref);
+                    if (!fs.existsSync(refPath)) {
+                        this.reporter.addIssue('IMPORTANT', 'MISSING_FILE',
+                            `Referenced file does not exist: ${ref}`, docFile);
+                    }
+                });
+
+                // Check screenshot references
+                const imgRefs = [...content.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)]
+                    .map(match => match[1]);
+
+                imgRefs.forEach(img => {
+                    if (!img.startsWith('http')) {
+                        const imgPath = path.join(this.repoPath, img);
+                        if (!fs.existsSync(imgPath)) {
+                            this.reporter.addIssue('IMPORTANT', 'MISSING_IMAGE',
+                                `Referenced image does not exist: ${img}`, docFile);
+                        }
+                    }
+                });
+
+            } catch (err) {
+                this.reporter.log(`Warning: Could not check references in ${docFile}: ${err.message}`, 'yellow');
+            }
+        });
+    }
+
+    async checkGitHistory() {
+        this.reporter.log('Checking git history for issues...', 'blue');
+
+        try {
+            // Check for AI attribution in commits
+            const gitLog = execSync('git log --pretty=format:"%s%n%b" -50', {
+                cwd: this.repoPath,
+                encoding: 'utf8'
+            });
+
+            if (gitLog.includes('Co-Authored-By: Claude') ||
+                gitLog.includes('Co-Authored-By: AI') ||
+                gitLog.includes('Generated by AI')) {
+                this.reporter.addIssue('IMPORTANT', 'AI_ATTRIBUTION',
+                    'Git history contains AI attribution - consider rebasing');
+            }
+
+            // Check for potential secrets in commit messages
+            this.blocklist.forEach(pattern => {
+                if (gitLog.toLowerCase().includes(pattern.toLowerCase())) {
+                    this.reporter.addIssue('BLOCKER', 'SECRET_IN_HISTORY',
+                        `Potential secret in git history: ${pattern}`);
+                }
+            });
+
+            // Check .gitignore coverage
+            const gitignorePath = path.join(this.repoPath, '.gitignore');
+            if (fs.existsSync(gitignorePath)) {
+                const gitignore = fs.readFileSync(gitignorePath, 'utf8');
+                const commonIgnores = ['.env', 'node_modules', '*.log', '.DS_Store', 'dist/', 'build/'];
+
+                commonIgnores.forEach(pattern => {
+                    if (!gitignore.includes(pattern)) {
+                        this.reporter.addIssue('MINOR', 'GITIGNORE_MISSING',
+                            `Consider adding ${pattern} to .gitignore`);
+                    }
+                });
+            } else {
+                this.reporter.addIssue('IMPORTANT', 'NO_GITIGNORE',
+                    'No .gitignore file found');
+            }
+
+        } catch (err) {
+            this.reporter.log(`Warning: Could not check git history: ${err.message}`, 'yellow');
+        }
+    }
+
+    async checkDocsConsistency() {
+        this.reporter.log('Checking documentation consistency...', 'blue');
+
+        const docFiles = ['README.md', 'INSTALL.md', 'SETUP.md'];
+        const docs = {};
+
+        docFiles.forEach(file => {
+            const fullPath = path.join(this.repoPath, file);
+            if (fs.existsSync(fullPath)) {
+                docs[file] = fs.readFileSync(fullPath, 'utf8');
+            }
+        });
+
+        if (Object.keys(docs).length < 2) return;
+
+        // Check for port number consistency
+        const ports = {};
+        Object.entries(docs).forEach(([file, content]) => {
+            const portMatches = [...content.matchAll(/(?:port|localhost:|:\s*)(\d{4,5})/gi)];
+            portMatches.forEach(match => {
+                const port = match[1];
+                if (!ports[port]) ports[port] = [];
+                ports[port].push(file);
+            });
+        });
+
+        Object.entries(ports).forEach(([port, files]) => {
+            if (files.length === 1) {
+                this.reporter.addIssue('MINOR', 'INCONSISTENT_PORT',
+                    `Port ${port} only mentioned in ${files[0]} - check other docs`);
+            }
+        });
+    }
+
+    async scanHardcodedPaths() {
+        this.reporter.log('Scanning for hardcoded paths...', 'blue');
+
+        const files = await glob.glob('**/*.{js,json,md,sh,py,yml,yaml}', {
+            cwd: this.repoPath,
+            ignore: ['node_modules/**', '.git/**', 'skills/audit-public/**', '**/audit-public/**']
+        });
+
+        files.forEach(file => {
+            const fullPath = path.join(this.repoPath, file);
+
+            try {
+                const content = fs.readFileSync(fullPath, 'utf8');
+                const lines = content.split('\n');
+
+                lines.forEach((line, index) => {
+                    // Check for localhost with port that might not match docs
+                    const localhostMatch = line.match(/localhost:(\d{4,5})/g);
+                    if (localhostMatch) {
+                        localhostMatch.forEach(match => {
+                            // This is minor - just flag for review
+                            this.reporter.addIssue('MINOR', 'HARDCODED_LOCALHOST',
+                                `Hardcoded localhost found: ${match} - verify matches documentation`,
+                                file, index + 1);
+                        });
+                    }
+                });
+
+            } catch (err) {
+                // Skip files we can't read
+            }
+        });
+    }
+
+    isBinaryFile(filePath) {
+        try {
+            const buffer = Buffer.alloc(512);
+            const fd = fs.openSync(filePath, 'r');
+            const bytesRead = fs.readSync(fd, buffer, 0, 512, 0);
+            fs.closeSync(fd);
+
+            // Check for null bytes which indicate binary
+            for (let i = 0; i < bytesRead; i++) {
+                if (buffer[i] === 0) return true;
+            }
+            return false;
+        } catch {
+            return true; // Assume binary if we can't read
+        }
+    }
+}
+
+// Main execution
+async function main() {
+    const args = process.argv.slice(2);
+    let repoPath = process.cwd();
+    let verbose = false;
+
+    // Parse arguments
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] === '--verbose' || args[i] === '-v') {
+            verbose = true;
+        } else if (args[i] === '--path') {
+            repoPath = args[i + 1];
+            i++; // Skip next arg
+        } else if (args[i] === '--help' || args[i] === '-h') {
+            console.log(`
+Usage: audit [options]
+
+Options:
+  --path <path>     Path to repository (default: current directory)
+  --verbose, -v     Verbose output
+  --help, -h        Show this help
+
+Examples:
+  audit                    # Audit current directory
+  audit --verbose          # With verbose output
+  audit --path /path/to/repo  # Audit specific directory
+`);
+            process.exit(0);
+        }
+    }
+
+    const audit = new PublicAudit(repoPath, verbose);
+    const exitCode = await audit.run();
+    process.exit(exitCode);
+}
+
+// Create blocklist file if it doesn't exist
+function ensureBlocklistExists() {
+    const claudeDir = path.join(process.env.HOME, '.claude');
+    const blocklistPath = path.join(claudeDir, '.audit-blocklist');
+
+    if (!fs.existsSync(claudeDir)) {
+        fs.mkdirSync(claudeDir, { recursive: true });
+    }
+
+    if (!fs.existsSync(blocklistPath)) {
+        const defaultBlocklist = `# Audit blocklist - patterns that should never appear in public repos
+# Add one pattern per line, lines starting with # are comments
+
+# Common credential patterns
+API_KEY=
+SECRET_KEY=
+PASSWORD=
+SSHPASS=
+private_key
+id_rsa
+id_ed25519
+
+# Personal domains/emails (add your own)
+@hotmail.com
+@gmail.com
+
+# Personal project names (customize for your projects)
+secret-project
+internal-tool
+private-repo
+
+# Database connection strings
+mysql://
+postgres://
+mongodb://
+
+# AWS/Cloud credentials
+aws_access_key_id
+aws_secret_access_key
+AMAZON_SECRET_ACCESS_KEY
+
+# Add your custom patterns below:
+`;
+        fs.writeFileSync(blocklistPath, defaultBlocklist);
+        console.log(`Created default blocklist at ${blocklistPath}`);
+        console.log('Customize it with your own sensitive patterns!');
+    }
+}
+
+if (require.main === module) {
+    ensureBlocklistExists();
+    main().catch(console.error);
+}
+
+module.exports = { PublicAudit, AuditReporter };

@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 # SOURCE_DIR is set per-instance in the override (add-user.sh creates it)
-# WorkingDirectory is set in the per-instance override conf
+# Default assumes /home/YOUR_USER/projects/claude-supervisor
 ExecStart=/usr/local/bin/node server.js
 Restart=on-failure
 RestartSec=5

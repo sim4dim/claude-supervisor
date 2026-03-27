@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MEMORY_DIR="${1:-$HOME/.claude/projects/memory}"
+if [ -z "${1:-}" ]; then
+  echo "Usage: $0 <memory-dir>" >&2
+  echo "  e.g. $0 \$HOME/.claude/projects/-home-user-projects-claude-supervisor/memory" >&2
+  exit 1
+fi
+MEMORY_DIR="$1"
 INDEX="$MEMORY_DIR/MEMORY.md"
 
 # Type to section name mapping
