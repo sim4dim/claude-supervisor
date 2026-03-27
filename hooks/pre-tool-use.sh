@@ -232,7 +232,11 @@ if [[ "$TOOL_NAME" == "Bash" ]]; then
         PREV="$NORM_CMD"
         # Strip "export VAR=VALUE && " or "export VAR=VALUE ; "
         NORM_CMD=$(echo "$NORM_CMD" | sed -E 's/^export\s+[A-Za-z_][A-Za-z_0-9]*=[^;&]*[;&]+\s*//')
-        # Strip "VAR=VALUE " inline assignment (no && needed, it's a prefix to the command)
+        # Strip "VAR=VALUE && " or "VAR=VALUE ; " (assignment chained with next command)
+        NORM_CMD=$(echo "$NORM_CMD" | sed -E 's/^[A-Za-z_][A-Za-z_0-9]*="[^"]*"\s*[;&]+\s*//')
+        NORM_CMD=$(echo "$NORM_CMD" | sed -E "s/^[A-Za-z_][A-Za-z_0-9]*='[^']*'\s*[;&]+\s*//")
+        NORM_CMD=$(echo "$NORM_CMD" | sed -E 's/^[A-Za-z_][A-Za-z_0-9]*=[^\s;&]*\s*[;&]+\s*//')
+        # Strip "VAR=VALUE " inline assignment (prefix to the command, no && needed)
         NORM_CMD=$(echo "$NORM_CMD" | sed -E 's/^[A-Za-z_][A-Za-z_0-9]*="[^"]*"\s+//')
         NORM_CMD=$(echo "$NORM_CMD" | sed -E "s/^[A-Za-z_][A-Za-z_0-9]*='[^']*'\s+//")
         NORM_CMD=$(echo "$NORM_CMD" | sed -E 's/^[A-Za-z_][A-Za-z_0-9]*=[^\s;&]*\s+//')
