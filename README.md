@@ -5,21 +5,24 @@ AI-powered supervision for Claude Code sessions. Evaluates tool call safety usin
 ## Architecture
 
 ```
-Claude Code (worker)
-    │ tool call
-    ▼
+Claude Code (worker)                          MQTT Broker
+    │ tool call                               ▲         │
+    ▼                                         │         ▼
 Hook script ──POST──▶  Supervisor Server ◀── Web UI (browser)
-    │                        │                      │
-    │ polls every 2s    Tier 1: Ollama         WebSocket
-    │                   (local LLM, default)        │
-    │                        │ if unavailable   ┌───┴────────┐
-    │                   Tier 2: claude -p       │ Approvals  │
-    │                   (Claude CLI fallback)   │ Terminals  │
-    │                        │                 │ Activity   │
-    │                  High confidence         └────────────┘
-    │                  auto-resolve
-    │                        │ low confidence
-    ◀── decision ◀──────────┘              human reviews + overrides
+    │                    │           │                  │
+    │ polls every 2s     │      MQTT pub/sub       WebSocket
+    │               Tier 1: Ollama  │                  │
+    │               (local LLM)     ▼              ┌───┴────────┐
+    │                    │     Agent status         │ Approvals  │
+    │               if unavailable  Cross-project  │ Terminals  │
+    │                    │     Chat rooms           │ Activity   │
+    │               Tier 2: claude -p  Coordinator  │ Agents     │
+    │               (CLI fallback)                 └────────────┘
+    │                    │
+    │              High confidence
+    │              auto-resolve
+    │                    │ low confidence
+    ◀── decision ◀──────┘              human reviews + overrides
 ```
 
 **Multi-tier evaluation**: Tier 1 is Ollama (fast, free, works offline). Tier 2 is `claude -p` (used when Ollama is down or for a second opinion on hard cases). An optional `ollama-proxy` addon can sit in front and route between local models and the Claude API dynamically.
