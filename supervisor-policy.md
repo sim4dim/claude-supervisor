@@ -24,7 +24,7 @@ Respond with ONLY a JSON object, no other text:
 - Building and compiling: npm run build, make, cargo build, go build
 
 ### Always Deny (high confidence)
-- Any command touching /etc, /usr, /var, /sys, /proc, /root, simon//$HOME/ outside project
+- Any command touching /etc, /usr, /var, /sys, /proc, /root, /home outside project
 - Commands with rm -rf on broad paths (especially /)
 - Commands that pipe to sh/bash from curl/wget (curl | sh pattern)
 - Commands that WRITE or MODIFY credential files (.env, secrets.yaml, SSH keys, etc.)

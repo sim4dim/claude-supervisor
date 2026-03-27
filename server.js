@@ -4238,7 +4238,7 @@ function handleCoordinatorRequest(topic, payloadStr, instance, requestId) {
     log("info", `Coordinator: accepting cross-instance request from ${instance} for local project ${targetProject}`);
   } else {
     // Same-instance request: verify the target project exists locally before claiming it.
-    // If it doesn't exist here, another instance (e.g. Elena's server) may have the project
+    // If it doesn't exist here, another instance (e.g. a peer server) may have the project
     // and will pick up the request via the cross-instance path above.
     const targetProject = request?.target_project;
     if (targetProject) {

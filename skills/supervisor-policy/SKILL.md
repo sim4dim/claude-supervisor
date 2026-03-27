@@ -22,7 +22,7 @@ The supervisor evaluates every tool call and either auto-approves, auto-denies, 
 
 ## Always Blocked
 
-- Commands touching `/etc`, `/usr`, `/var`, `/sys`, `/proc`, `/root`, or `simon//$HOME/` outside the project
+- Commands touching `/etc`, `/usr`, `/var`, `/sys`, `/proc`, `/root`, or `/home` outside the project
 - `rm -rf` on broad or system paths
 - `curl | sh` or `wget | bash` (download and execute patterns)
 - Writing or modifying credential files: `.env`, `secrets.yaml`, SSH keys, etc.

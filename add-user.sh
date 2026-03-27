@@ -3,8 +3,8 @@
 # Run as root: sudo ./add-user.sh <username> <port> <project_root>
 #
 # Examples:
-#   sudo ./add-user.sh simon 3847 simon//$HOME//simon/projects
-#   sudo ./add-user.sh elena 3848 simon//$HOME//elena/projects
+#   sudo ./add-user.sh user1 3847 /home/user1/projects
+#   sudo ./add-user.sh user2 3848 /home/user2/projects
 
 set -e
 
@@ -61,10 +61,10 @@ EOF
 echo "Created systemd override (User=$USERNAME, WorkingDirectory=$SCRIPT_DIR)"
 
 # ── Install sv helper on user's PATH ──────────────────
-SV_BIN="simon//$HOME//$USERNAME/.local/bin"
+SV_BIN="/home/$USERNAME/.local/bin"
 mkdir -p "$SV_BIN"
 ln -sf "$SCRIPT_DIR/bin/sv" "$SV_BIN/sv"
-chown -R "$USERNAME:$USERNAME" "simon//$HOME//$USERNAME/.local"
+chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.local"
 echo "Symlinked sv helper to $SV_BIN/sv"
 
 # ── Enable and start ──────────────────────────────────

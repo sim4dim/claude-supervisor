@@ -220,6 +220,10 @@ if [[ "$TOOL_NAME" == "Bash" ]]; then
     # This catches patterns like "export FOO=bar && npm test" or "cd /path && make"
     NORM_CMD="$COMMAND"
 
+    # Source learned dynamic approval rules (after NORM_CMD and auto_approve are defined)
+    DYNAMIC_APPROVALS="$(dirname "${BASH_SOURCE[0]}")/dynamic-approvals.sh"
+    [[ -f "$DYNAMIC_APPROVALS" ]] && source "$DYNAMIC_APPROVALS"
+
     # Strip leading comments (lines starting with #)
     if [[ "$NORM_CMD" =~ ^[[:space:]]*# ]]; then
         auto_approve

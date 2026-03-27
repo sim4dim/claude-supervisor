@@ -26,12 +26,12 @@ Audit repository for sensitive data before publishing publicly. Scans for person
 ## What it checks
 
 ### BLOCKER Issues (non-zero exit code)
-- Personal usernames (simon, elena, sdimenstein)
-- Personal email domains (hotmail, sdimenstein)
-- Real home paths (simon//$HOME//simon, simon//$HOME//elena)
+- Personal usernames (configure via ~/.claude/.audit-blocklist)
+- Personal email domains (configure via ~/.claude/.audit-blocklist)
+- Real home paths (/home/<username>)
 - Internal IP addresses (192.168.x.x, 10.x.x.x)
 - Credential files (.credentials.json, containing SSHPASS, API_KEY, SECRET)
-- Private project names (moremoney, infogenesis, f5-obi)
+- Private project names (configure via ~/.claude/.audit-blocklist)
 - Custom patterns from ~/.claude/.audit-blocklist
 
 ### IMPORTANT Issues (should review)

@@ -126,13 +126,7 @@ class PublicAudit {
     loadBlocklist() {
         const blocklistPath = path.join(process.env.HOME, '.claude', '.audit-blocklist');
         const defaults = [
-            // Usernames
-            'simon', 'elena', 'sdimenstein',
-            // Email domains
-            '@hotmail', '@sdimenstein',
-            // Private projects
-            'moremoney', 'infogenesis', 'f5-obi',
-            // Credential patterns
+            // Credential patterns (generic — always checked)
             'SSHPASS=', 'API_KEY=', 'SECRET=', 'PASSWORD=',
             '.credentials.json', 'id_rsa', 'id_ed25519'
         ];
@@ -144,6 +138,8 @@ class PublicAudit {
                     .map(line => line.trim())
                     .filter(line => line && !line.startsWith('#'));
                 return [...defaults, ...custom];
+            } else {
+                this.reporter.log(`Warning: No custom blocklist configured. Create ~/.claude/.audit-blocklist to add personal names and private project patterns.`, 'yellow');
             }
         } catch (err) {
             this.reporter.log(`Warning: Could not load blocklist: ${err.message}`, 'yellow');
