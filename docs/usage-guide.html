@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Supervisor — Usage Guide</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23161b22'/%3E%3Ctext x='16' y='23' text-anchor='middle' font-family='Arial,Helvetica,sans-serif' font-weight='bold' font-size='18' fill='%2358a6ff'%3ESV%3C/text%3E%3C/svg%3E">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #21262d;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+      --purple: #bc8cff;
+      --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      padding: 0 0 60px;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 32px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 16px; font-weight: 600; }
+    header .subtitle { color: var(--muted); font-size: 13px; }
+
+    nav {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 20px 0;
+      position: fixed;
+      top: 49px;
+      left: 0;
+      width: 200px;
+      height: calc(100vh - 49px);
+      overflow-y: auto;
+    }
+    nav a {
+      display: block;
+      padding: 5px 20px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13px;
+      border-left: 2px solid transparent;
+    }
+    nav a:hover { color: var(--text); }
+    nav a.active { color: var(--accent); border-left-color: var(--accent); }
+    nav .nav-section {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      padding: 14px 20px 4px;
+    }
+
+    main {
+      margin-left: 200px;
+      padding: 32px 48px;
+      max-width: 900px;
+    }
+
+    h2 {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 40px 0 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      scroll-margin-top: 70px;
+    }
+    h2:first-of-type { margin-top: 0; }
+
+    h3 {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 20px 0 8px;
+      color: var(--accent);
+      scroll-margin-top: 70px;
+    }
+
+    p { margin: 8px 0; color: var(--text); }
+
+    code {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 5px;
+      color: #e6edf3;
+    }
+
+    pre {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      margin: 10px 0;
+    }
+    pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .cmd { color: #79c0ff; }
+    .arg { color: #a5d6ff; }
+    .comment { color: var(--muted); font-style: italic; }
+    .kw { color: var(--purple); }
+    .str { color: var(--green); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    th {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      text-align: left;
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    td {
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      vertical-align: top;
+    }
+    tr:hover td { background: var(--surface); }
+    td:first-child { font-family: var(--mono); font-size: 12px; color: var(--accent); white-space: nowrap; }
+
+    details {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin: 10px 0;
+    }
+    summary {
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::before {
+      content: '▶';
+      font-size: 10px;
+      color: var(--muted);
+      transition: transform 0.15s;
+      flex-shrink: 0;
+    }
+    details[open] summary::before { transform: rotate(90deg); }
+    details[open] summary { border-bottom: 1px solid var(--border); }
+    .details-body { padding: 14px; }
+
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      padding: 1px 7px;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+    .badge-blue { background: #1f3a5f; color: var(--accent); }
+    .badge-green { background: #1a3a2a; color: var(--green); }
+    .badge-yellow { background: #3a2d0a; color: var(--yellow); }
+    .badge-purple { background: #2a1f4a; color: var(--purple); }
+    .badge-red { background: #3a1a1a; color: var(--red); }
+
+    .tip {
+      background: #1a2f4a;
+      border-left: 3px solid var(--accent);
+      padding: 10px 14px;
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    .tip strong { color: var(--accent); }
+
+    .warn {
+      background: #2a2010;
+      border-left: 3px solid var(--yellow);
+      padding: 10px 14px;
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    .warn strong { color: var(--yellow); }
+
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 12px 0;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+    }
+    .card h4 {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: var(--accent);
+    }
+    .card p { font-size: 13px; color: var(--muted); margin: 4px 0; }
+
+    ul { padding-left: 20px; margin: 8px 0; }
+    li { margin: 4px 0; font-size: 13px; }
+
+    @media (max-width: 768px) {
+      nav { display: none; }
+      main { margin-left: 0; padding: 20px; }
+      .grid2 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Claude Supervisor</h1>
+  <span class="subtitle">Usage Guide &amp; Best Practices &mdash; <a href="https://github.com/sim4dim/claude-supervisor" style="color: var(--accent); text-decoration: none;">GitHub</a></span>
+</header>
+
+<nav id="sidenav">
+  <div class="nav-section">Reference</div>
+  <a href="#coordinator-types">Coordinator Types</a>
+  <a href="#slash-commands">Slash Commands</a>
+  <a href="#agent-types">Agent Types</a>
+  <a href="#security-policy">Security Policy</a>
+  <a href="#delegation">Delegation</a>
+  <a href="#session-continuity">Session Continuity</a>
+  <a href="#auto-answer">Auto-Answer</a>
+  <div class="nav-section">Communication</div>
+  <a href="#chat-rooms">Chat Rooms</a>
+  <a href="#mqtt">MQTT &amp; sv</a>
+  <div class="nav-section">UI</div>
+  <a href="#ui-panels">UI Panels</a>
+  <a href="#file-image-drop">File &amp; Image Drop</a>
+  <a href="#email-notify">Email Notifications</a>
+  <a href="#best-practices">Best Practices</a>
+  <a href="#quick-ref">Quick Reference</a>
+</nav>
+
+<main>
+
+  <!-- ── COORDINATOR TYPES ── -->
+  <h2 id="coordinator-types">Coordinator Types</h2>
+  <p>Use the Coordinator panel to dispatch work to agents in other project sessions. Choose the type that matches your intent.</p>
+
+  <table>
+    <tr>
+      <th>Type</th>
+      <th>What happens</th>
+      <th>When to use</th>
+    </tr>
+    <tr>
+      <td>research</td>
+      <td>Agent investigates and reports findings — read-only, no changes</td>
+      <td>Understand a codebase, look up behavior, gather facts</td>
+    </tr>
+    <tr>
+      <td>review</td>
+      <td>Code or approach review with structured feedback</td>
+      <td>Get a second opinion before merging or deploying</td>
+    </tr>
+    <tr>
+      <td>action</td>
+      <td>Agent makes changes in the target project</td>
+      <td>Delegate implementation work to another session</td>
+    </tr>
+    <tr>
+      <td>plan</td>
+      <td>Triggers Moltke pattern — planner proposes, adversarial reviewer finds blockers</td>
+      <td>Architecture decisions, API design, migration strategy</td>
+    </tr>
+    <tr>
+      <td>feasibility</td>
+      <td>Same as plan — adversarial check before commitment</td>
+      <td>Hardware purchases, third-party integrations, irreversible changes</td>
+    </tr>
+    <tr>
+      <td>debate</td>
+      <td>Multi-agent structured debate: PRO agent vs CON agent, gap finder, active moderator</td>
+      <td>Unclear tradeoffs, technology choices, conflicting requirements</td>
+    </tr>
+  </table>
+
+  <details>
+    <summary>How plan / feasibility works (Moltke pattern)</summary>
+    <div class="details-body">
+      <p>Named after the Prussian field marshal who stress-tested every plan before committing.</p>
+      <ol style="padding-left:20px;margin:10px 0">
+        <li>A <strong>Planner agent</strong> proposes an approach, enumerates assumptions, and identifies risks.</li>
+        <li>A <strong>Moltke (adversarial) agent</strong> reads the plan and actively tries to break it — finding hidden costs, dependency conflicts, integration gotchas, and timeline risks.</li>
+        <li>Both outputs appear in the Operations panel. You decide whether to proceed.</li>
+      </ol>
+      <div class="tip"><strong>Tip:</strong> Run feasibility before any hardware purchase or major dependency addition. It costs one agent turn and can save days of rework.</div>
+    </div>
+  </details>
+
+  <details>
+    <summary>How debate works</summary>
+    <div class="details-body">
+      <p>A structured 5-round protocol using a shared chat room (<code>debate-{id}</code>):</p>
+      <ol style="padding-left:20px;margin:10px 0">
+        <li><strong>Persona setup</strong> — AI proposes expert personas for each side. Human approves before proceeding. Skip with <code>--auto</code>.</li>
+        <li><strong>Round 1: Opening arguments</strong> — PRO and CON agents argue in parallel, each building their full case.</li>
+        <li><strong>Round 2: Rebuttals</strong> — Both sides read each other's opening and respond directly, in parallel.</li>
+        <li><strong>Round 3: Moderator challenge + defense</strong> — Moderator asks hard questions; both sides respond.</li>
+        <li><strong>Round 4: Gap finder</strong> — Independent agent reviews the full exchange and surfaces blind spots neither side addressed.</li>
+        <li><strong>Round 5: Final statements + verdict</strong> — Each side closes; moderator issues a balanced synthesis with a recommendation.</li>
+      </ol>
+      <p>Flags: <code>--debaters N</code> (number of positions, default 2), <code>--auto</code> (skip persona approval), <code>--project &lt;name&gt;</code> (run in another project's session).</p>
+      <div class="tip"><strong>Tip:</strong> Use <code>/debate</code> when you've been going back and forth on a decision. The gap-finder in Round 4 regularly surfaces considerations neither side thought of.</div>
+    </div>
+  </details>
+
+
+  <!-- ── SLASH COMMANDS ── -->
+  <h2 id="slash-commands">Slash Commands</h2>
+  <p>Type these directly into the terminal. They expand into multi-agent workflows.</p>
+
+  <table>
+    <tr>
+      <th>Command</th>
+      <th>Description</th>
+    </tr>
+    <tr>
+      <td>/feasibility &lt;topic&gt;</td>
+      <td>Adversarial feasibility check — planner proposes, Moltke finds blockers. Best for decisions with non-trivial cost or risk.</td>
+    </tr>
+    <tr>
+      <td>/debate &lt;topic&gt;</td>
+      <td>Structured 5-round adversarial debate with expert personas, gap analysis, and moderator verdict.</td>
+    </tr>
+    <tr>
+      <td>/review-changes</td>
+      <td>Show pending uncommitted changes and decide whether to restart the session. Useful after long agent runs.</td>
+    </tr>
+    <tr>
+      <td>/project-status</td>
+      <td>Quick health check — git status, recent commits, open issues, pending approvals.</td>
+    </tr>
+    <tr>
+      <td>/collab &lt;topic&gt;</td>
+      <td>Multi-project consensus protocol. Two projects negotiate in 3 rounds toward agreement.</td>
+    </tr>
+    <tr>
+      <td>/centurion</td>
+      <td>Parallel security scan (packages, system, git, credentials, advisories). Produces a health score 0–100.</td>
+    </tr>
+    <tr>
+      <td>/ask-project &lt;project&gt; &lt;question&gt;</td>
+      <td>Send a research question to another project's running session via the coordinator.</td>
+    </tr>
+    <tr>
+      <td>/release-monitor</td>
+      <td>Check installed Claude Code version against npm latest. Evaluates new features for adoption.</td>
+    </tr>
+    <tr>
+      <td>/restart-server</td>
+      <td>Safe server restart with change summary, active session warning, and confirmation gate.</td>
+    </tr>
+  </table>
+
+  <pre><code><span class="comment"># Examples</span>
+/feasibility adding a PostgreSQL read replica for analytics
+/debate use Redis vs in-memory caching for session state
+/review-changes
+/project-status
+/collab should we migrate auth-service to OAuth2
+/centurion
+/ask-project billing-service "does createInvoice throw or return null on failure?"
+/release-monitor
+/restart-server</code></pre>
+
+
+  <!-- ── AGENT TYPES ── -->
+  <h2 id="agent-types">Agent Types</h2>
+
+  <div class="grid2">
+    <div class="card">
+      <h4>Researcher</h4>
+      <p>Read-only investigation. Reads files, searches code, reports findings. Never modifies anything.</p>
+    </div>
+    <div class="card">
+      <h4>Implementer</h4>
+      <p>Makes code changes, runs tests, fixes bugs. Full read-write access within the project.</p>
+    </div>
+    <div class="card">
+      <h4>Planner</h4>
+      <p>Proposes approaches and architecture. Output is a structured plan document, not code.</p>
+    </div>
+    <div class="card">
+      <h4>Reviewer / Moltke</h4>
+      <p>Adversarial review. Reads a plan or diff and actively tries to find failure modes before you commit.</p>
+    </div>
+  </div>
+
+  <p>All agents have <code>background: true</code> so their output doesn't flood your terminal. Results appear in the Agent Activity panel and via MQTT messages.</p>
+
+
+  <!-- ── CHAT ROOMS ── -->
+  <h2 id="chat-rooms">Chat Rooms</h2>
+  <p>Chat rooms let multiple agents share findings without polling. Messages are retained on individual MQTT topics so none are lost.</p>
+
+  <h3>sv chat commands</h3>
+  <pre><code><span class="cmd">sv chat post</span>   <span class="arg">&lt;room&gt; "message"</span>    <span class="comment"># post, returns seq number</span>
+<span class="cmd">sv chat history</span> <span class="arg">&lt;room&gt;</span>            <span class="comment"># read all messages in order</span>
+<span class="cmd">sv chat wait</span>   <span class="arg">&lt;room&gt; &lt;seq&gt;</span>       <span class="comment"># block until message N arrives</span>
+<span class="cmd">sv chat read</span>   <span class="arg">&lt;room&gt;</span>            <span class="comment"># read latest message</span>
+<span class="cmd">sv chat clear</span>  <span class="arg">&lt;room&gt;</span>            <span class="comment"># remove all messages</span>
+<span class="cmd">sv chat init</span>   <span class="arg">&lt;room&gt;</span>            <span class="comment"># initialize (optional)</span></code></pre>
+
+  <h3>Auto-created rooms</h3>
+  <table>
+    <tr>
+      <th>Room name</th>
+      <th>Created by</th>
+      <th>Purpose</th>
+    </tr>
+    <tr>
+      <td>coordinator-{id}</td>
+      <td>Coordinator dispatch</td>
+      <td>Shared context between dispatched agents in a multi-step request</td>
+    </tr>
+    <tr>
+      <td>debate-{id}</td>
+      <td>/debate or debate coordinator type</td>
+      <td>PRO, CON, and moderator exchange during a structured debate</td>
+    </tr>
+  </table>
+
+  <details>
+    <summary>Example: two agents sharing findings</summary>
+    <div class="details-body">
+      <pre><code><span class="comment"># Agent A: researcher publishes findings</span>
+<span class="kw">export</span> SV_CHAT_ROOM=<span class="str">"design-review"</span>
+sv chat history <span class="str">"$SV_CHAT_ROOM"</span>       <span class="comment"># read what others posted first</span>
+sv chat post   <span class="str">"$SV_CHAT_ROOM"</span> <span class="str">"[researcher] getUserById returns null on missing user (auth.js:45)"</span>
+
+<span class="comment"># Agent B: implementer waits for researcher, then acts</span>
+sv chat wait <span class="str">"$SV_CHAT_ROOM"</span> 1          <span class="comment"># blocks until seq 1 arrives</span>
+<span class="comment"># ... reads findings, makes changes ...</span>
+sv chat post <span class="str">"$SV_CHAT_ROOM"</span> <span class="str">"[implementer] Added null check + test at auth.js:45"</span></code></pre>
+    </div>
+  </details>
+
+  <div class="tip"><strong>Tip:</strong> Chat room history persists in retained MQTT topics. Use <code>sv chat history &lt;room&gt;</code> at any time to review past decisions — even days later.</div>
+
+
+  <!-- ── MQTT ── -->
+  <h2 id="mqtt">MQTT &amp; sv Communication</h2>
+  <p>All agent communication flows through the <code>sv</code> helper, which publishes to the Mosquitto broker. These commands are auto-approved — no supervisor delay.</p>
+
+  <h3>Status reporting</h3>
+  <pre><code><span class="kw">export</span> SV_TASK_ID=<span class="str">"fix-auth-bug"</span>            <span class="comment"># set once at agent start</span>
+
+sv pub status started  <span class="str">"Investigating auth token expiry"</span>
+sv pub progress 50     <span class="str">"Found 3 affected files, patching now"</span>
+sv pub discovery       <span class="str">"Tokens expire after 1h, not 24h as documented"</span>
+sv pub status completed</code></pre>
+
+  <div class="tip"><strong>Note:</strong> PostToolUse hooks auto-publish Bash/Edit/Write/Task events. You only need <code>sv pub</code> for high-level milestones.</div>
+
+  <h3>Data exchange between agents</h3>
+  <pre><code><span class="comment"># Agent A: publish findings for Agent B</span>
+sv retain <span class="str">"supervisor/myproject/agent-a/findings"</span> <span class="str">'{"files":["auth.js"],"issue":"..."}'</span>
+
+<span class="comment"># Agent B: read them (blocks up to 30s)</span>
+sv read  <span class="str">"supervisor/myproject/agent-a/findings"</span>
+
+<span class="comment"># Clean up</span>
+sv clear <span class="str">"supervisor/myproject/agent-a/findings"</span></code></pre>
+
+  <h3>Coordinator help requests</h3>
+  <pre><code><span class="comment"># Ask another project's agent for help</span>
+sv request <span class="str">"Check if getUserById throws or returns null"</span> --project auth-service --type research
+<span class="comment"># Prints a request-id</span>
+
+<span class="comment"># Wait for the response (120s timeout)</span>
+result=$(sv request wait &lt;request-id&gt; 120)
+echo <span class="str">"$result"</span>
+
+<span class="comment"># In the target session — respond</span>
+sv respond &lt;request-id&gt; <span class="str">"Returns null at users.js:45"</span></code></pre>
+
+
+  <!-- ── UI PANELS ── -->
+  <h2 id="ui-panels">UI Panels</h2>
+
+  <div class="grid2">
+    <div class="card">
+      <h4>Operations</h4>
+      <p>Unified panel combining what was previously "Coordinator" and "Agent Activity." Shows subagent tasks (dispatched, running, completed), coordinator requests (click <strong>Dispatch</strong> to start workflows), debate rounds, and live MQTT status/progress/discovery events. This is the primary view for tracking all agent work across your sessions.</p>
+    </div>
+    <div class="card">
+      <h4>Version Badge</h4>
+      <p>Gold badge in the supervisor bar — shows number of pending commits since last restart. Click to see the diff. The dashboard also checks the installed Claude Code version against npm latest. An update button triggers <code>claude update</code> across all sessions.</p>
+    </div>
+    <div class="card">
+      <h4>Time Bar</h4>
+      <p>Shown for running agents. Elapsed time vs budget. Turns amber as deadline approaches.</p>
+    </div>
+    <div class="card">
+      <h4>Eval History</h4>
+      <p>Filterable log of every AI evaluation: approved, denied, or escalated, with confidence scores. Filter by project or search for specific commands.</p>
+    </div>
+    <div class="card">
+      <h4>Context % Badge</h4>
+      <p>Color-coded badge on each terminal tab showing context window usage. Normal &rarr; warning (50%) &rarr; alert (65%) &rarr; critical (80%).</p>
+    </div>
+    <div class="card">
+      <h4>Rate Limits</h4>
+      <p>5-hour and 7-day API usage parsed from <code>/usage</code> output and Anthropic OAuth headers. Shown in the dashboard header.</p>
+    </div>
+    <div class="card">
+      <h4>Team Chat</h4>
+      <p>Two modes: human-to-human messaging across instances, and a live viewer of agent-to-agent chat rooms. Watch debates, collab negotiations, and coordinator exchanges unfold in real time. Toggle between Human and Agent views.</p>
+    </div>
+    <div class="card">
+      <h4>Document Viewer</h4>
+      <p>Renders markdown from project <code>docs/</code> directories. Can fetch docs from peer supervisor instances.</p>
+    </div>
+    <div class="card">
+      <h4>Controller / Viewer</h4>
+      <p>First browser gets keyboard input; others are read-only viewers with a Take Control button.</p>
+    </div>
+  </div>
+
+  <div class="tip"><strong>Mobile PWA:</strong> The dashboard includes <code>apple-mobile-web-app-capable</code> meta tags. Add it to your home screen from Safari or Chrome to use it as a standalone app.</div>
+
+  <h3>Supervisor bar indicators</h3>
+  <table>
+    <tr>
+      <th>Indicator</th>
+      <th>Meaning</th>
+    </tr>
+    <tr>
+      <td>Green dot</td>
+      <td>WebSocket connected to supervisor</td>
+    </tr>
+    <tr>
+      <td>AI Supervisor: auto</td>
+      <td>Tool approvals handled automatically by AI evaluator</td>
+    </tr>
+    <tr>
+      <td>AI Supervisor: off</td>
+      <td>All tool calls go directly to Claude — no evaluation</td>
+    </tr>
+    <tr>
+      <td>Gold badge (version)</td>
+      <td>Uncommitted changes exist since last server start</td>
+    </tr>
+    <tr>
+      <td>Claude API status</td>
+      <td>Click to expand real-time Claude.ai status detail</td>
+    </tr>
+  </table>
+
+
+  <!-- ── FILE AND IMAGE DROP ── -->
+  <h2 id="file-image-drop">File and Image Drop</h2>
+  <p>The terminal accepts files and images via drag-and-drop or clipboard paste. Images are saved to your project's <code>screenshots/</code> directory; other files go to the <code>drops/</code> directory. The file path is auto-typed into the terminal so you can append your prompt and hit Enter.</p>
+
+  <h3>Drag and drop</h3>
+  <p>Drag any file onto the terminal area. A "Drop file here" overlay appears while dragging. Release to drop — the file is saved and the path is inserted at the cursor. Images (PNG, JPG, GIF, WebP) go to <code>screenshots/</code>; all other files go to <code>drops/</code>.</p>
+
+  <h3>Clipboard paste</h3>
+  <p>Copy an image to your clipboard (e.g. take a screenshot with your OS shortcut), click the terminal to focus it, then press <code>Ctrl+V</code>. The image is extracted from the clipboard and handled identically to a drag-and-drop.</p>
+
+  <h3>What happens next</h3>
+  <p>The file path is typed into the terminal with a trailing space. Add your prompt text and press Enter. Claude reads images natively via the Read tool — no extra steps required.</p>
+
+  <table>
+    <tr>
+      <th>Detail</th>
+      <th>Value</th>
+    </tr>
+    <tr>
+      <td>Image save location</td>
+      <td><code>screenshots/</code> in the project directory</td>
+    </tr>
+    <tr>
+      <td>Other file save location</td>
+      <td><code>drops/</code> in the project directory</td>
+    </tr>
+    <tr>
+      <td>Supported image formats</td>
+      <td>PNG, JPG, GIF, WebP</td>
+    </tr>
+    <tr>
+      <td>Max file size</td>
+      <td>10 MB</td>
+    </tr>
+  </table>
+
+  <div class="tip"><strong>Tip:</strong> Take a screenshot, <code>Ctrl+V</code> into the terminal, then type <code>what's wrong with this?</code> — Claude will analyze the image.</div>
+
+
+  <!-- ── EMAIL NOTIFICATIONS ── -->
+  <h2 id="email-notify">Email Notifications</h2>
+  <p><strong>Note: this feature is not yet implemented.</strong> The configuration below is accepted but no email is sent in the current release.</p>
+  <p>When a Claude session ends — not on every turn, only on real stops like <code>max_turns</code>, user interrupt, or task completion — the supervisor will send you an email with the project name, stop reason, and a summary of git state (uncommitted changes and recent commits).</p>
+
+  <h3>How to enable</h3>
+
+  <p><strong>From within a session</strong> — takes effect immediately, no restart needed:</p>
+  <pre><code>echo <span class="str">"you@gmail.com"</span> &gt; .claude/notify-email</code></pre>
+
+  <p><strong>Via environment variable</strong> — set in your systemd unit or shell environment before launching:</p>
+  <pre><code><span class="comment"># In the systemd unit file:</span>
+Environment=<span class="str">SUPERVISOR_NOTIFY_EMAIL=you@gmail.com</span>
+
+<span class="comment"># Or in your shell before launching:</span>
+<span class="kw">export</span> SUPERVISOR_NOTIFY_EMAIL=<span class="str">you@gmail.com</span></code></pre>
+
+  <p>If both are set, <code>.claude/notify-email</code> takes precedence.</p>
+
+  <h3>How to disable</h3>
+  <pre><code><span class="comment"># Remove the per-project file:</span>
+rm .claude/notify-email
+
+<span class="comment"># Or unset the environment variable:</span>
+<span class="kw">unset</span> SUPERVISOR_NOTIFY_EMAIL</code></pre>
+
+  <div class="tip"><strong>Note:</strong> Email notifications are not yet implemented. The configuration above is accepted but no email is sent in the current release.</div>
+
+
+  <!-- ── SECURITY POLICY ── -->
+  <h2 id="security-policy">Security Policy</h2>
+  <p>The AI evaluator reads <code>supervisor-policy.md</code> — a plain markdown file in your supervisor config directory. Edit it directly to add, remove, or modify rules. Changes take effect immediately with no restart required.</p>
+
+  <h3>Three-tier structure</h3>
+  <table>
+    <tr>
+      <th>Tier</th>
+      <th>Behavior</th>
+      <th>Examples</th>
+    </tr>
+    <tr>
+      <td>Always approve</td>
+      <td>Auto-approved with no delay or AI evaluation</td>
+      <td>Read-only tools, <code>sv</code> commands, <code>npm test</code>, git reads</td>
+    </tr>
+    <tr>
+      <td>Always deny</td>
+      <td>Blocked immediately, never sent to AI evaluator</td>
+      <td><code>rm -rf</code> on system paths, writes to <code>.env</code>, <code>git push --force</code> to main</td>
+    </tr>
+    <tr>
+      <td>Evaluate carefully</td>
+      <td>Sent to AI evaluator — approved, denied, or escalated to human based on confidence score</td>
+      <td>Piped bash commands, Docker builds, operations outside the project directory</td>
+    </tr>
+  </table>
+
+  <h3>Learned approvals</h3>
+  <p><code>dynamic-approvals.sh</code> is auto-generated from eval history. Commands that are approved 3 or more times with 95%+ confidence are promoted to the fast-path auto-approve list, skipping the AI evaluator entirely on future calls.</p>
+
+  <div class="tip"><strong>Tip:</strong> Add a comment to <code>supervisor-policy.md</code> explaining why a rule exists. The AI evaluator reads the full file for context when making close calls.</div>
+
+
+  <!-- ── DELEGATION ENFORCEMENT ── -->
+  <h2 id="delegation">Delegation Enforcement</h2>
+  <p>The supervisor enforces subagent delegation based on remaining context window percentage, so your main context stays lean.</p>
+
+  <h3>Context thresholds</h3>
+  <table>
+    <tr>
+      <th>Context remaining</th>
+      <th>Behavior</th>
+    </tr>
+    <tr>
+      <td>&gt; 50%</td>
+      <td>No enforcement — full access to all tools</td>
+    </tr>
+    <tr>
+      <td>30–50%</td>
+      <td>Warning injected — nudges toward Task tool delegation</td>
+    </tr>
+    <tr>
+      <td>&lt; 30%</td>
+      <td>Implementation tools denied — corrective instructions injected automatically</td>
+    </tr>
+  </table>
+
+  <h3>Enforced patterns (denied when context is low)</h3>
+  <ul>
+    <li>3 or more chained <code>&amp;&amp;</code> operators in a single bash command</li>
+    <li>Write calls over ~150 lines</li>
+    <li>3 or more sequential Write/Edit/Bash calls across multiple files without any Task tool use</li>
+  </ul>
+
+  <h3>NOT enforced (always allowed)</h3>
+  <ul>
+    <li>Single-file edits, iterative patches to one file</li>
+    <li>Test runs, builds, linters</li>
+    <li>Git operations (status, log, diff, commit)</li>
+    <li>API calls with piped output processing</li>
+    <li>Read-only work (Read, Glob, Grep)</li>
+  </ul>
+
+  <div class="tip"><strong>Note:</strong> The Task tool itself is never denied — it <em>is</em> the delegation mechanism. Spawning a subagent whose prompt describes multi-step work is always approved.</div>
+
+
+  <!-- ── SESSION CONTINUITY ── -->
+  <h2 id="session-continuity">Session Continuity</h2>
+  <p>The supervisor preserves work across context compaction and session restarts through a layered recovery system.</p>
+
+  <h3>Pre-compaction</h3>
+  <ul>
+    <li>Auto-commits all uncommitted work before context is compacted</li>
+    <li>Writes <code>.claude/progress-snapshot.md</code> — git state, agent activity, pending approvals</li>
+    <li>Extracts a decision trail from the transcript (key choices, discoveries, blockers)</li>
+    <li>Publishes an MQTT event so the dashboard logs the compaction</li>
+  </ul>
+
+  <h3>Session handoff</h3>
+  <ul>
+    <li><strong>On real session end</strong> (user interrupt, max_turns, task completion — not every response turn): <code>on-stop.sh</code> writes <code>.claude/session-handoff.md</code> with stop reason, git status, uncommitted changes summary, recent commits, and a recovery checklist</li>
+    <li><strong>On next session start</strong>: <code>session-start.sh</code> re-injects up to 3 files as system context:
+      <ul>
+        <li><code>session-handoff.md</code> — if &lt;48 hours old</li>
+        <li><code>progress-snapshot.md</code> — if &lt;24 hours old, with instruction to resume previous work</li>
+        <li><code>transcript-excerpt.md</code> — if &lt;24 hours old, with instruction to extract a decision trail</li>
+      </ul>
+    </li>
+  </ul>
+  <div class="tip"><strong>Key detail:</strong> The handoff only writes on real session endings, not on every response turn. This avoids overwriting a meaningful handoff with a generic "end_turn" state.</div>
+
+  <h3>Post-compaction recovery</h3>
+  <p><code>CLAUDE.md.template</code> includes a recovery checklist that is re-read after every compaction. The checklist directs Claude to read the progress snapshot, check git log, verify task state, and ask the user before continuing if state is unclear.</p>
+
+  <h3>Context tracking</h3>
+  <p>The supervisor parses PTY output to extract context window percentage and saves it to <code>.claude/context-percent.txt</code>. Predictive warnings are injected at 50%, 65%, and 80% to prompt proactive delegation before limits are hit.</p>
+
+
+  <!-- ── AUTO-ANSWER ── -->
+  <h2 id="auto-answer">AskUserQuestion Auto-Answer</h2>
+  <p>When a worker Claude instance uses the <code>AskUserQuestion</code> tool, the supervisor can answer automatically without human intervention.</p>
+
+  <p>A secondary Claude Sonnet instance evaluates the question and injects a typed answer directly into the terminal after a configurable delay. The delay gives you a window to override the injected answer if you want to respond yourself.</p>
+
+  <h3>Configuration</h3>
+  <pre><code><span class="comment"># Fully unattended mode — AI answers all questions automatically</span>
+<span class="kw">export</span> SUPERVISOR_AUTO_ANSWER_QUESTIONS=<span class="str">ai</span>
+
+<span class="comment"># Human mode (default) — questions pause and wait for your input</span>
+<span class="kw">export</span> SUPERVISOR_AUTO_ANSWER_QUESTIONS=<span class="str">human</span></code></pre>
+
+  <div class="tip"><strong>Tip:</strong> Set <code>SUPERVISOR_AUTO_ANSWER_QUESTIONS=ai</code> before starting long background runs. The session won't stall waiting for a human if Claude has a clarifying question mid-task.</div>
+
+
+  <!-- ── BEST PRACTICES ── -->
+  <h2 id="best-practices">Best Practices</h2>
+
+  <h3>Before major decisions</h3>
+  <ul>
+    <li>Run <code>/feasibility &lt;topic&gt;</code> before hardware purchases, API integrations, or architecture changes you can't easily undo.</li>
+    <li>Run <code>/debate &lt;topic&gt;</code> when you've been going back and forth — the moderator often finds middle ground neither side saw.</li>
+    <li>Use <code>research</code> coordinator type to gather facts from another project before making a cross-service change.</li>
+  </ul>
+
+  <h3>Keeping context lean</h3>
+  <ul>
+    <li>Delegate all multi-file reads, code edits, and long searches to subagents — keep your main context for coordination.</li>
+    <li>Commit working changes frequently. The pre-compact hook auto-commits, but don't rely on it.</li>
+    <li>Use <code>/review-changes</code> after long agent runs to see what changed before restarting.</li>
+  </ul>
+
+  <h3>Agent coordination</h3>
+  <ul>
+    <li>Use chat rooms when two or more agents need to share findings — retained messages mean nothing is lost.</li>
+    <li>Use <code>sv retain/read</code> for structured data handoffs (JSON payloads, file lists, findings).</li>
+    <li>Set <code>SV_TASK_ID</code> at the top of every subagent task — it labels all MQTT activity in the dashboard.</li>
+  </ul>
+
+  <div class="warn"><strong>Note:</strong> The supervisor evaluator blocks <code>rm -rf</code> on broad paths, writes to <code>.env</code>/secrets, and <code>git push --force</code> to main. These require explicit human approval even in auto mode.</div>
+
+
+  <!-- ── QUICK REF ── -->
+  <h2 id="quick-ref">Quick Reference</h2>
+
+  <details open>
+    <summary>sv commands at a glance</summary>
+    <div class="details-body">
+      <table>
+        <tr><th>Command</th><th>Purpose</th></tr>
+        <tr><td>sv pub status started "..."</td><td>Report agent start</td></tr>
+        <tr><td>sv pub progress N "..."</td><td>Report progress (0–100)</td></tr>
+        <tr><td>sv pub discovery "..."</td><td>Highlight a key finding</td></tr>
+        <tr><td>sv pub status completed</td><td>Report agent done</td></tr>
+        <tr><td>sv chat post &lt;room&gt; "..."</td><td>Post to chat room</td></tr>
+        <tr><td>sv chat history &lt;room&gt;</td><td>Read all room messages</td></tr>
+        <tr><td>sv chat wait &lt;room&gt; N</td><td>Block until message N</td></tr>
+        <tr><td>sv retain &lt;topic&gt; &lt;data&gt;</td><td>Publish retained data</td></tr>
+        <tr><td>sv read &lt;topic&gt;</td><td>Read retained data</td></tr>
+        <tr><td>sv clear &lt;topic&gt;</td><td>Remove retained data</td></tr>
+        <tr><td>sv request "..." --project P --type T</td><td>Ask another project for help</td></tr>
+        <tr><td>sv respond &lt;id&gt; "..."</td><td>Answer a coordinator request</td></tr>
+        <tr><td>sv task create "description"</td><td>Create a local task</td></tr>
+        <tr><td>sv task list</td><td>List tasks</td></tr>
+        <tr><td>sv task start &lt;id&gt;</td><td>Mark task in progress</td></tr>
+        <tr><td>sv task close &lt;id&gt;</td><td>Mark task complete</td></tr>
+        <tr><td>sv pub alert "..."</td><td>Publish an alert event</td></tr>
+      </table>
+    </div>
+  </details>
+
+  <details open>
+    <summary>Coordinator types at a glance</summary>
+    <div class="details-body">
+      <table>
+        <tr><th>Type</th><th>Agents spawned</th><th>Best for</th></tr>
+        <tr><td>research</td><td>1 (read-only)</td><td>Fact-finding, codebase exploration</td></tr>
+        <tr><td>review</td><td>1 (read-only)</td><td>Code review, approach critique</td></tr>
+        <tr><td>action</td><td>1 (read-write)</td><td>Delegated implementation</td></tr>
+        <tr><td>plan / feasibility</td><td>2 (planner + Moltke)</td><td>Architecture, irreversible decisions</td></tr>
+        <tr><td>debate</td><td>4+ (debaters + gap finder + moderator)</td><td>Unclear tradeoffs, contested choices</td></tr>
+      </table>
+    </div>
+  </details>
+
+</main>
+
+<script>
+  // Highlight active nav link on scroll
+  const sections = document.querySelectorAll('h2[id]');
+  const navLinks = document.querySelectorAll('nav a');
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        navLinks.forEach(a => a.classList.remove('active'));
+        const link = document.querySelector(`nav a[href="#${entry.target.id}"]`);
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>

@@ -1,0 +1,3888 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Claude Supervisor</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23161b22'/%3E%3Ctext x='16' y='23' text-anchor='middle' font-family='Arial,Helvetica,sans-serif' font-weight='bold' font-size='18' fill='%2358a6ff'%3ESV%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/css/xterm.css">
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0/lib/addon-fit.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0f1117; --surface: #1a1d27; --surface2: #22252f;
+      --border: #2a2d3a; --text: #e4e4e7; --muted: #71717a;
+      --accent: #c4956a; --green: #4ade80; --red: #f87171;
+      --yellow: #fbbf24; --blue: #60a5fa;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', system-ui, sans-serif;
+      background: var(--bg); color: var(--text);
+      min-height: 100dvh; -webkit-text-size-adjust: 100%;
+      display: flex; flex-direction: column; height: 100dvh; overflow: hidden;
+    }
+    .header {
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+      background: var(--bg); z-index: 10; flex-shrink: 0;
+    }
+    .header h1 { font-size: 17px; font-weight: 600; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot.off { background: var(--red); }
+    .badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; background: var(--yellow); color: #000; margin-left: 8px; display: none; }
+    .badge.show { display: inline-block; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+    .supervisor-bar {
+      padding: 6px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
+      font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; align-items: center;
+      flex-shrink: 0;
+    }
+    .mode-label { font-weight: 700; text-transform: uppercase; }
+    .mode-label.auto { color: var(--blue); }
+    .mode-label.assisted { color: var(--yellow); }
+    .mode-label.manual { color: var(--muted); }
+
+    /* ── Mobile view toggle ─────────────────────────────── */
+    .view-toggle {
+      display: none; flex-shrink: 0;
+      border-bottom: 1px solid var(--border); background: var(--bg);
+    }
+    .view-toggle-inner {
+      display: flex; padding: 8px 16px; gap: 4px;
+    }
+    .view-tab {
+      flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 10px;
+      background: transparent; color: var(--muted); font-size: 13px; font-weight: 600;
+      cursor: pointer; text-align: center; transition: all 0.15s;
+    }
+    .view-tab:active { transform: scale(0.97); }
+    .view-tab.active { background: var(--surface2); color: var(--text); border-color: var(--accent); }
+    .view-tab .tab-badge {
+      font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px;
+      background: var(--yellow); color: #000; margin-left: 4px; display: none;
+    }
+    .view-tab .tab-badge.show { display: inline-block; }
+
+    /* ── Main layout ────────────────────────────────────── */
+    .main-split {
+      display: flex; flex: 1; overflow: hidden; min-height: 0;
+    }
+
+    /* ── Terminal panel (left) ───────────────────────────── */
+    .terminal-panel {
+      display: flex; flex-direction: column; flex: 0 0 60%;
+      min-height: 0; min-width: 0; overflow: hidden;
+    }
+    .term-tab-bar {
+      display: flex; align-items: center; gap: 0; flex-wrap: wrap;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      flex-shrink: 0; min-height: 36px;
+    }
+    .term-new-btn {
+      padding: 6px 12px; background: transparent; border: none;
+      color: var(--accent); font-size: 13px; font-weight: 700; cursor: pointer;
+      white-space: nowrap; flex-shrink: 0; transition: color 0.15s;
+    }
+    .term-new-btn:hover { color: var(--text); }
+    .term-new-btn:active { transform: scale(0.95); }
+    .term-tab {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 10px; background: transparent; border: none;
+      color: var(--muted); font-size: 12px; font-weight: 500; cursor: pointer;
+      white-space: nowrap; border-bottom: 2px solid transparent;
+      transition: all 0.15s; flex-shrink: 0;
+    }
+    .term-tab .tlabel {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;
+    }
+    .term-tab:hover { color: var(--text); background: var(--surface2); }
+    .term-tab.active { color: var(--text); border-bottom-color: var(--accent); background: var(--surface2); }
+    .term-tab .tdot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .term-tab .tdot.running { background: var(--green); box-shadow: 0 0 4px var(--green); }
+    .term-tab .tdot.exited { background: var(--red); }
+    .term-tab .tclose {
+      width: 16px; height: 16px; border-radius: 4px; border: none;
+      background: transparent; color: var(--muted); font-size: 12px; line-height: 16px;
+      text-align: center; cursor: pointer; padding: 0; flex-shrink: 0;
+    }
+    .term-tab .tclose:hover { background: var(--red); color: #fff; }
+
+    .term-container {
+      flex: 1; position: relative; background: #0f1117; min-height: 0; overflow: hidden;
+    }
+    .term-container .xterm { height: 100%; }
+    .drop-overlay {
+      display: none; position: absolute; inset: 0; z-index: 100;
+      background: rgba(15, 17, 23, 0.85); border: 2px dashed var(--accent);
+      align-items: center; justify-content: center;
+      color: var(--accent); font-size: 1.2rem; pointer-events: none;
+    }
+    .drop-overlay.active { display: flex; }
+    /* Mobile paste button — only shown on touch devices via JS */
+    .mobile-paste-btn {
+      display: none; padding: 3px 10px; border-radius: 4px; border: 1px solid var(--border);
+      background: var(--surface2); color: var(--muted); font-size: 11px; cursor: pointer;
+      margin-left: 6px; flex-shrink: 0;
+    }
+    .mobile-paste-btn:active { background: var(--accent); color: #fff; }
+    .term-empty {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 14px; text-align: center; padding: 20px;
+    }
+    .term-statusbar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 4px 12px; background: var(--surface); border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--muted); flex-shrink: 0; min-height: 24px;
+    }
+    .term-statusbar .controller { color: var(--green); font-weight: 600; }
+    .term-statusbar .viewer { color: var(--yellow); font-weight: 600; }
+    .term-statusbar .term-actions-bar { display: flex; gap: 8px; align-items: center; }
+    .term-statusbar .term-action-btn {
+      padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); font-size: 10px; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .term-statusbar .term-action-btn:hover { color: var(--text); border-color: var(--text); }
+    .term-statusbar .term-action-btn.restart:hover { color: var(--green); border-color: var(--green); }
+
+    /* ── Draggable divider between terminal and approval panels ── */
+    .panel-divider {
+      width: 5px; cursor: col-resize; background: var(--border); flex-shrink: 0;
+      position: relative; z-index: 10; transition: background 0.15s;
+    }
+    .panel-divider:hover, .panel-divider.dragging {
+      background: var(--accent);
+    }
+    .panel-divider::after {
+      content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 3px; height: 32px; border-radius: 2px;
+      background: rgba(255,255,255,0.15);
+    }
+    .panel-divider:hover::after, .panel-divider.dragging::after {
+      background: rgba(255,255,255,0.3);
+    }
+
+    /* ── Approval panel (right) ─────────────────────────── */
+    .approval-panel {
+      display: flex; flex-direction: column; flex: 0 0 40%; min-height: 0; min-width: 0; overflow: hidden;
+    }
+
+    .filter-bar {
+      padding: 8px 16px; border-bottom: 1px solid var(--border);
+      display: flex; gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+      background: var(--bg); z-index: 9; flex-shrink: 0;
+    }
+    .filter-btn {
+      padding: 5px 12px; border-radius: 16px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); font-size: 12px; font-weight: 500;
+      cursor: pointer; white-space: nowrap; transition: all 0.15s;
+    }
+    .filter-btn:active { transform: scale(0.95); }
+    .filter-btn.active { background: var(--surface2); color: var(--text); border-color: var(--text); }
+    .filter-btn .proj-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: middle; }
+
+    .approval-scroll {
+      flex: 1; overflow-y: auto; min-height: 0;
+      display: flex; flex-direction: column; gap: 8px; padding: 8px 12px;
+      scrollbar-width: thin; scrollbar-color: #444 #1a1a2e;
+    }
+    .approval-scroll::-webkit-scrollbar { width: 6px; }
+    .approval-scroll::-webkit-scrollbar-track { background: #1a1a2e; }
+    .approval-scroll::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+
+    /* ── Unified sidebar panel system ────────────────────── */
+    .sv-panel {
+      background: #1a1a2e;
+      border: 1px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .sv-panel.panel-open {
+      flex: 1 0 auto;
+      display: flex; flex-direction: column;
+    }
+    .sv-panel-hdr {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; cursor: pointer; user-select: none;
+    }
+    .sv-panel-hdr h3 { margin: 0; font-size: 14px; color: #e0e0e0; }
+    .sv-panel-badge {
+      background: #0f3460; color: #4fc3f7; border-radius: 12px;
+      padding: 2px 8px; font-size: 11px; min-width: 20px; text-align: center;
+    }
+    .sv-panel-toggle { color: #666; font-size: 12px; }
+    .sv-panel-body { display: none; }
+    .sv-panel-body.open { display: block; overflow-y: auto; min-height: 40px; flex: 1; scrollbar-width: thin; scrollbar-color: #444 #1a1a2e; }
+    .panel-divider-h {
+      height: 6px; cursor: row-resize; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .panel-divider-h::after {
+      content: ''; width: 30px; height: 2px; background: #333; border-radius: 1px;
+    }
+    .panel-divider-h:hover::after, .panel-divider-h.dragging::after {
+      background: #666;
+    }
+    .sv-panel-body.open::-webkit-scrollbar { width: 6px; }
+    .sv-panel-body.open::-webkit-scrollbar-track { background: #1a1a2e; }
+    .sv-panel-body.open::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+    .sv-panel.dragging { opacity: 0.5; }
+    .sv-panel.drag-over { border-top: 2px solid #3b82f6; }
+
+    .section { padding: 12px 16px; }
+    .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 8px; font-weight: 600; }
+
+    .card {
+      background: var(--surface); border: 1px solid var(--yellow); border-radius: 14px;
+      padding: 14px; margin-bottom: 10px; animation: slideIn 0.3s ease;
+    }
+    .card.hidden { display: none; }
+    .card.ai-evaluating { border-color: var(--blue); }
+    .card.ai-resolved { border-color: var(--muted); opacity: 0.75; }
+    @keyframes slideIn { from { transform: translateY(-8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .card .tool { font-weight: 600; color: var(--text); font-size: 14px; }
+    .card .id { color: #a1a1aa; font-size: 11px; float: right; }
+    .card .proj-badge { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 8px; margin-left: 8px; vertical-align: middle; display: inline-block; }
+    .card .summary {
+      font-family: 'SF Mono', 'Menlo', monospace; font-size: 12px; color: #d4d4d8;
+      margin: 6px 0; word-break: break-all; background: rgba(0,0,0,0.25);
+      padding: 8px; border-radius: 8px; max-height: 100px; overflow-y: auto; line-height: 1.4;
+    }
+    .card .time { font-size: 11px; color: #a1a1aa; }
+    .ai-badge {
+      font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 8px;
+      margin-left: 6px; display: inline-block;
+    }
+    .ai-badge.evaluating { background: var(--blue); color: #fff; animation: pulse 1s infinite; }
+    .ai-badge.approved { background: var(--green); color: #000; }
+    .ai-badge.denied { background: var(--red); color: #fff; }
+    .ai-badge.error { background: var(--muted); color: #fff; }
+    .ai-reason {
+      font-size: 11px; color: #c4c4cc; margin-top: 6px;
+      padding: 6px 8px; background: rgba(96,165,250,0.1);
+      border-radius: 6px; border-left: 3px solid var(--blue);
+    }
+    .actions { display: flex; gap: 8px; margin-top: 10px; }
+    .btn { flex: 1; padding: 12px; border: none; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; transition: transform 0.1s; }
+    .btn:active { transform: scale(0.95); }
+    .btn-yes { background: var(--green); color: #000; }
+    .btn-no { background: var(--red); color: #fff; }
+    .btn-override { flex: 1; padding: 10px; border: 1px solid var(--yellow); border-radius: 12px; background: transparent; color: var(--yellow); font-size: 13px; font-weight: 600; cursor: pointer; }
+    .btn-override:active { transform: scale(0.95); }
+
+    .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 24px; }
+
+    #log { }
+    .log-row { font-family: 'SF Mono', monospace; font-size: 11px; padding: 3px 0; color: var(--muted); line-height: 1.5; border-bottom: 1px solid rgba(255,255,255,0.02); }
+    .log-row.hidden { display: none; }
+    .log-row .t { color: var(--muted); margin-right: 6px; }
+    .log-row.ok .m { color: var(--green); }
+    .log-row.warn .m { color: var(--yellow); }
+    .log-row.error .m { color: var(--red); }
+    .log-row.tool .m { color: var(--blue); }
+    .log-row.notify .m { color: var(--accent); }
+    .log-row.info .m { color: var(--text); }
+    .log-row.ai .m { color: var(--blue); }
+    .divider { border-top: 1px solid var(--border); }
+
+    /* ── Operations Panel Tabs ───────────────────────────── */
+    .ops-tabs { display: flex; gap: 2px; padding: 8px 12px 0; }
+    .ops-tab {
+      background: #1e293b; border: 1px solid #334155; border-radius: 4px;
+      color: #94a3b8; font-size: 11px; padding: 3px 10px; cursor: pointer;
+    }
+    .ops-tab.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+    .ops-pane { display: none; }
+    .ops-pane.active { display: block; }
+
+    /* ── Agent Activity (Feed tab) ───────────────────────── */
+    #agentTasks {
+      max-height: 280px;
+      overflow-y: auto;
+      padding: 0 12px 12px;
+    }
+    #agentTasks::-webkit-scrollbar { width: 6px; }
+    #agentTasks::-webkit-scrollbar-track { background: transparent; }
+    #agentTasks::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 3px; }
+    #agentTasks::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+    .agent-task {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 12px; margin-bottom: 6px;
+      font-size: 13px; transition: opacity 0.3s;
+    }
+    .agent-task.completed { opacity: 0.5; }
+    .agent-task .task-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 4px;
+    }
+    .agent-task .task-id {
+      font-family: 'SF Mono', monospace; font-size: 11px;
+      color: var(--muted); background: var(--surface2);
+      padding: 1px 6px; border-radius: 4px;
+    }
+    .agent-task .task-project {
+      font-size: 11px; color: var(--accent); font-weight: 500;
+    }
+    .agent-task .task-status {
+      font-size: 11px; padding: 1px 6px; border-radius: 4px; font-weight: 500;
+    }
+    .agent-task .task-status.running { background: rgba(96,165,250,0.15); color: var(--blue); }
+    .agent-task .task-status.completed { background: rgba(74,222,128,0.15); color: var(--green); }
+    .agent-task .task-status.failed { background: rgba(248,113,113,0.15); color: var(--red); }
+    .agent-task .task-timing {
+      margin-top: 5px; font-size: 11px; color: var(--muted);
+      display: flex; gap: 12px; align-items: center;
+    }
+    .agent-task .task-timing .duration {
+      color: var(--blue); font-variant-numeric: tabular-nums;
+    }
+    .agent-task.completed .task-timing .duration {
+      color: var(--green);
+    }
+    .agent-task .task-timing .last-active {
+      opacity: 0.7;
+    }
+    .agent-task .discovery {
+      margin-top: 4px; padding: 4px 8px;
+      border-left: 2px solid var(--yellow);
+      font-size: 12px; color: var(--text); opacity: 0.9;
+    }
+    .agent-task .message {
+      margin-top: 3px; font-size: 12px; color: var(--muted);
+    }
+
+    /* ── Coordinator Section ─────────────────────────────── */
+    .coordinator-instance {
+      color: #666;
+      font-size: 11px;
+      margin-left: 8px;
+    }
+    #coordinatorRequests {
+      max-height: 300px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #444 #1a1a2e;
+    }
+    #coordinatorRequests::-webkit-scrollbar { width: 6px; }
+    #coordinatorRequests::-webkit-scrollbar-track { background: #1a1a2e; }
+    #coordinatorRequests::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+    .coord-request {
+      padding: 10px 16px;
+      border-top: 1px solid #222;
+    }
+    .coord-request-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      justify-content: flex-start;
+      margin-bottom: 4px;
+    }
+    .coord-request-header .coord-actions { margin-left: auto; }
+    .coord-request-desc {
+      font-size: 13px;
+      color: #e0e0e0;
+      margin-bottom: 6px;
+      word-break: break-word;
+    }
+    .coord-request-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: #888;
+    }
+    .coord-status {
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .coord-status.pending { background: #1a3a5c; color: #4fc3f7; }
+    .coord-status.dispatched { background: #1a3a1a; color: #81c784; }
+    .coord-status.running { background: #1a3060; color: #90caf9; }
+    .coord-status.completed { background: #1a3a1a; color: #4caf50; }
+    .coord-status.failed { background: #3a1a1a; color: #ef5350; }
+    .coord-status.timeout { background: #3a2a1a; color: #ff9800; }
+    .coord-status.cancelled { background: #2a2a2a; color: #888; }
+    .coord-type-badge {
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .coord-type-badge.task { background: #2a2a2a; color: #9ca3af; }
+    .coord-type-badge.request { background: #1a2a4a; color: #7aadcf; }
+    .coord-request.auto-task { border-left: 2px solid #374151; }
+    .coord-progress {
+      margin-top: 5px;
+      font-size: 11px;
+      color: #9ca3af;
+    }
+    .coord-progress-bar-wrap {
+      height: 3px;
+      background: #2a2a2a;
+      border-radius: 2px;
+      margin-top: 3px;
+      overflow: hidden;
+    }
+    .coord-progress-bar {
+      height: 100%;
+      background: #4b7aad;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+    .coord-result {
+      margin-top: 6px;
+      padding: 8px;
+      background: #111;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #a0e0a0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      display: none;
+    }
+    .coord-result.show { display: block; }
+    .coord-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .coord-btn {
+      padding: 2px 8px;
+      border: 1px solid #444;
+      border-radius: 3px;
+      background: #1a1a2e;
+      color: #aaa;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .coord-btn:hover { background: #2a2a3e; color: #e0e0e0; }
+    .coord-btn.cancel:hover { background: #3a1a1a; color: #ef5350; }
+    .coord-empty {
+      padding: 16px;
+      text-align: center;
+      color: #555;
+      font-size: 13px;
+    }
+
+    /* ── New Terminal Dialog ─────────────────────────────── */
+    .dialog-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+      z-index: 100; align-items: center; justify-content: center;
+    }
+    .dialog-overlay.open { display: flex; }
+    .dialog {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+      width: 90%; max-width: 400px; max-height: 70vh; display: flex; flex-direction: column;
+      animation: slideIn 0.2s ease;
+    }
+    .dialog-header {
+      padding: 16px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .dialog-header h2 { font-size: 16px; font-weight: 600; }
+    .dialog-close {
+      width: 28px; height: 28px; border-radius: 8px; border: none;
+      background: transparent; color: var(--muted); font-size: 18px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+    }
+    .dialog-close:hover { background: var(--surface2); color: var(--text); }
+    .dialog-body { padding: 8px; overflow-y: auto; flex: 1; }
+    .dialog-loading { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
+    .project-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px; border-radius: 10px; cursor: pointer;
+      transition: background 0.15s; border: none; background: transparent;
+      width: 100%; text-align: left; color: var(--text); font-size: 14px; font-weight: 500;
+    }
+    .project-row:hover { background: var(--surface2); }
+    .project-row:active { transform: scale(0.98); }
+    .project-row .pdot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .project-row .pname { flex: 1; }
+    .project-row .parrow { color: var(--muted); font-size: 12px; }
+    .new-project-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); margin-top: 4px; }
+    .new-project-row input { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; color: var(--text); font-size: 13px; outline: none; }
+    .new-project-row input:focus { border-color: var(--accent); }
+    .new-project-row button { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+    .new-project-row button:hover { opacity: 0.85; }
+
+    /* ── Question Overlay ──────────────────────────────── */
+    .question-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:110; align-items:center; justify-content:center }
+    .question-overlay.open { display:flex }
+    .question-dialog { background:var(--surface); border:2px solid var(--accent); border-radius:16px; width:90%; max-width:500px; max-height:80vh; display:flex; flex-direction:column; animation:slideIn 0.2s ease }
+    .question-header { padding:16px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center }
+    .question-header h2 { font-size:16px; font-weight:600; color:var(--accent); margin:0 }
+    .question-body { padding:16px; overflow-y:auto; flex:1 }
+    .question-text { font-size:14px; color:var(--text); margin-bottom:12px; line-height:1.5 }
+    .question-subtext { font-size:12px; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px }
+    .question-option { display:block; width:100%; padding:12px 16px; margin-bottom:8px; border:1px solid var(--border); border-radius:10px; background:var(--surface); color:var(--text); font-size:14px; cursor:pointer; text-align:left; transition:all 0.15s; font-family:inherit }
+    .question-option:hover { border-color:var(--accent); background:var(--bg) }
+    .question-option:active { transform:scale(0.98) }
+    .question-option .opt-label { font-weight:600 }
+    .question-option .opt-desc { font-size:12px; color:var(--muted); margin-top:4px }
+    .question-footer { padding:12px 16px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:space-between }
+    .question-ai-btn { padding:10px 16px; border:1px solid var(--blue); border-radius:10px; background:transparent; color:var(--blue); font-size:13px; font-weight:600; cursor:pointer; transition:all 0.15s; font-family:inherit }
+    .question-ai-btn:hover { background:rgba(96,165,250,0.1) }
+    .question-ai-btn:disabled { opacity:0.5; cursor:not-allowed }
+    .question-skip-btn { padding:10px 16px; border:1px solid var(--muted); border-radius:10px; background:transparent; color:var(--muted); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit }
+    .question-proj-badge { font-size:11px; font-weight:600; padding:2px 8px; border-radius:8px; margin-left:8px; display:inline-block }
+    .question-progress { margin-top:12px; font-size:11px; color:var(--muted); text-align:center }
+
+    /* ── Stuck Session Rescue ──────────────────────────── */
+    .rescue-bar { display:none; padding:8px 12px; background:rgba(250,204,21,0.15); border-bottom:1px solid var(--yellow); align-items:center; gap:8px; font-size:13px; color:var(--yellow) }
+    .rescue-bar.visible { display:flex }
+    .rescue-bar .rescue-text { flex:1 }
+    .rescue-btn { padding:6px 14px; border:1px solid var(--yellow); border-radius:8px; background:transparent; color:var(--yellow); font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; transition:all 0.15s }
+    .rescue-btn:hover { background:rgba(250,204,21,0.2) }
+
+    /* ── Compaction Warning Banner ──────────────────────── */
+    .compaction-banner { position:fixed; top:8px; left:50%; transform:translateX(-50%); background:#3a2a00; border:1px solid #ff9800; color:#ffcc02; padding:8px 20px; border-radius:6px; font-size:13px; z-index:10000; animation:compactFadeIn 0.3s; box-shadow:0 2px 12px rgba(255,152,0,0.3) }
+    @keyframes compactFadeIn { from { opacity:0; transform:translateX(-50%) translateY(-10px) } to { opacity:1; transform:translateX(-50%) translateY(0) } }
+
+    /* ── Version Update Banner ──────────────────────────── */
+    .version-banner {
+      display: none; padding: 8px 16px;
+      background: linear-gradient(90deg, #1a2a3a, #1a3a2a);
+      border-bottom: 1px solid var(--blue);
+      font-size: 12px; color: var(--text);
+      align-items: center; gap: 10px;
+      flex-shrink: 0;
+    }
+    .version-banner.show { display: flex; }
+    .version-banner .ver-text { flex: 1; }
+    .version-banner .ver-old { color: var(--muted); text-decoration: line-through; }
+    .version-banner .ver-new { color: var(--green); font-weight: 600; }
+    .version-banner .ver-arrow { color: var(--muted); margin: 0 4px; }
+    .version-banner .ver-btn {
+      padding: 4px 12px; border-radius: 6px; border: 1px solid var(--blue);
+      background: transparent; color: var(--blue); font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s; white-space: nowrap;
+    }
+    .version-banner .ver-btn:hover { background: rgba(96,165,250,0.15); }
+    .version-banner .ver-btn.update-btn { border-color: var(--green); color: var(--green); }
+    .version-banner .ver-btn.update-btn:hover { background: rgba(74,222,128,0.15); }
+    .version-banner .ver-btn.dismiss-btn { border-color: var(--muted); color: var(--muted); }
+    .release-notes-dialog {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+      width: 90%; max-width: 600px; max-height: 80vh; display: flex; flex-direction: column;
+      animation: slideIn 0.2s ease;
+    }
+    .release-notes-body {
+      padding: 16px; overflow-y: auto; flex: 1;
+      font-size: 13px; line-height: 1.6; color: var(--text);
+    }
+    .release-notes-body h2 { font-size: 15px; color: var(--accent); margin: 12px 0 6px; }
+    .release-notes-body h3 { font-size: 14px; color: var(--text); margin: 10px 0 4px; }
+    .release-notes-body ul { padding-left: 20px; margin: 4px 0; }
+    .release-notes-body li { margin: 2px 0; }
+    .release-notes-body code { background: var(--surface2); padding: 1px 4px; border-radius: 3px; font-family: 'SF Mono', monospace; font-size: 12px; }
+    .release-notes-body a { color: var(--blue); }
+    .ver-badge {
+      font-size: 9px; font-weight: 600; padding: 1px 5px; border-radius: 6px;
+      margin-left: 3px; background: rgba(96,165,250,0.2); color: var(--blue);
+    }
+
+    /* ── Responsive ─────────────────────────────────────── */
+    @media (max-width: 900px) {
+      .view-toggle { display: block; }
+      .main-split { flex-direction: column; }
+      .terminal-panel { flex: 1; border-right: none; }
+      .approval-panel { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+      .panel-divider { display: none; }
+      .terminal-panel.hidden-mobile { display: none; }
+      .approval-panel.hidden-mobile { display: none; }
+      .approval-scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    }
+    @media (min-width: 901px) {
+      .view-toggle { display: none !important; }
+      .terminal-panel.hidden-mobile { display: flex !important; }
+      .approval-panel.hidden-mobile { display: flex !important; }
+    }
+
+    /* ── Eval History Section ─────────────────────────────── */
+    .eval-history-filter-bar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 12px; border-top: 1px solid #222; flex-wrap: wrap;
+    }
+    .eval-filter-select {
+      background: #16213e; color: #ccc; border: 1px solid #333;
+      border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer;
+    }
+    .eval-filter-btn {
+      background: #16213e; color: #888; border: 1px solid #333;
+      border-radius: 6px; padding: 3px 10px; font-size: 11px; cursor: pointer;
+    }
+    .eval-filter-btn.active { background: #0f3460; color: #4fc3f7; border-color: #4fc3f7; }
+    .eval-filter-btn.refresh { margin-left: auto; color: #aaa; }
+    #evalHistoryList {
+      max-height: 320px; overflow-y: auto;
+      scrollbar-width: thin; scrollbar-color: #444 #1a1a2e;
+    }
+    #evalHistoryList::-webkit-scrollbar { width: 6px; }
+    #evalHistoryList::-webkit-scrollbar-track { background: #1a1a2e; }
+    #evalHistoryList::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+    .eval-entry {
+      padding: 7px 14px; border-top: 1px solid #1e1e3a;
+      border-left: 3px solid transparent; cursor: pointer;
+      font-size: 12px; transition: background 0.15s;
+    }
+    .eval-entry:hover { background: rgba(255,255,255,0.03); }
+    .eval-entry.approved { border-left-color: #4ade80; }
+    .eval-entry.denied { border-left-color: #f87171; }
+    .eval-entry-row {
+      display: flex; align-items: center; gap: 6px;
+    }
+    .eval-entry-time { color: #555; font-size: 10px; white-space: nowrap; }
+    .eval-entry-proj {
+      font-size: 10px; padding: 1px 5px; border-radius: 4px;
+      font-weight: 600; white-space: nowrap;
+    }
+    .eval-entry-tool {
+      color: #c4b5fd; font-family: 'SF Mono', monospace; font-size: 11px; white-space: nowrap;
+    }
+    .eval-entry-decision { font-size: 12px; white-space: nowrap; }
+    .eval-entry-conf { font-size: 10px; font-weight: 600; white-space: nowrap; }
+    .eval-entry-cmd {
+      color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      flex: 1; min-width: 0;
+    }
+    .eval-entry-expand {
+      display: none; margin-top: 5px; padding: 6px 8px;
+      background: #16213e; border-radius: 6px;
+      color: #ccc; font-size: 11px; white-space: pre-wrap; word-break: break-all;
+    }
+    .eval-entry.open .eval-entry-expand { display: block; }
+    .eval-entry-model { color: #555; font-size: 10px; margin-top: 3px; }
+    .conf-high { color: #4ade80; }
+    .conf-mid  { color: #facc15; }
+    .conf-low  { color: #f87171; }
+
+    /* Activity Log */
+    #activityLogBody { padding: 8px 12px 12px; }
+
+    /* Team Chat */
+    .team-chat-count { background: #3b82f6; color: #fff; font-size: 10px; font-weight: 700;
+      padding: 1px 6px; border-radius: 10px; display: none; }
+    .team-chat-count.show { display: inline-block; }
+    #teamChatBody { display: flex; flex-direction: column; padding: 0 12px 12px; margin-top: 0; }
+    .tc-room-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+    .tc-room-bar select { background: #1e293b; border: 1px solid #334155; border-radius: 4px;
+      color: #e2e8f0; font-size: 11px; padding: 3px 6px; cursor: pointer; outline: none; flex: 1; min-width: 80px; }
+    .tc-tabs { display: flex; gap: 2px; }
+    .tc-tab { background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #94a3b8;
+      font-size: 11px; padding: 3px 8px; cursor: pointer; }
+    .tc-tab.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+    .tc-pane { display: flex; flex-direction: column; gap: 4px; }
+    #teamChatMsgs, #tcAgentMsgs { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
+      padding: 6px; background: #0f172a; border-radius: 6px; border: 1px solid #1e293b; margin-bottom: 6px; }
+    #teamChatMsgs:empty::before { content: 'No messages yet'; color: #475569; font-size: 12px; padding: 8px; text-align: center; }
+    #tcAgentMsgs:empty::before { content: 'No agent chat messages'; color: #475569; font-size: 12px; padding: 8px; text-align: center; }
+    .tc-msg { font-size: 12px; line-height: 1.4; padding: 4px 7px; border-radius: 5px; background: #1e293b; max-width: 92%; user-select: text; -webkit-user-select: text; cursor: text; }
+    .tc-msg.mine { align-self: flex-end; background: #1d3a5f; }
+    .tc-msg.agent { background: #0f2a1a; border-left: 2px solid #22c55e; }
+    .tc-msg-head { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
+    .tc-msg-user { font-weight: 700; font-size: 11px; }
+    .tc-msg-proj { font-size: 10px; color: #64748b; }
+    .tc-msg-inst { font-size: 10px; color: #525e6e; }
+    .tc-msg-room { font-size: 10px; color: #2d6a4f; }
+    .tc-msg-text { margin-top: 1px; color: #cbd5e1; word-break: break-word; user-select: text; -webkit-user-select: text; }
+    .tc-msg-time { font-size: 10px; color: #475569; margin-top: 2px; }
+    .tc-input { display: flex; gap: 4px; }
+    .tc-input input { flex: 1; background: #1e293b; border: 1px solid #334155; border-radius: 5px;
+      color: #e2e8f0; font-size: 12px; padding: 5px 8px; outline: none; }
+    .tc-input input:focus { border-color: #3b82f6; }
+    .tc-input button { background: #3b82f6; border: none; border-radius: 5px; color: #fff;
+      font-size: 12px; padding: 5px 10px; cursor: pointer; white-space: nowrap; }
+    .tc-input button:hover { background: #2563eb; }
+    /* Document Viewer */
+    .doc-viewer {
+      background: #1a1a2e; border: 1px solid #333; border-radius: 12px;
+      width: 90%; max-width: 800px; max-height: 80vh;
+      display: flex; flex-direction: column; margin: auto;
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    }
+    .doc-viewer-hdr {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 20px; border-bottom: 1px solid #333;
+    }
+    .doc-viewer-title { display: flex; align-items: center; gap: 8px; }
+    .doc-viewer-proj {
+      background: #0f3460; color: #4fc3f7;
+      padding: 2px 8px; border-radius: 10px; font-size: 11px;
+    }
+    .doc-viewer-name { font-size: 16px; font-weight: 600; color: #e0e0e0; }
+    .doc-viewer-close {
+      background: none; border: none; color: #666; font-size: 24px;
+      cursor: pointer; padding: 0 4px; line-height: 1;
+    }
+    .doc-viewer-close:hover { color: #e0e0e0; }
+    .doc-viewer-content {
+      padding: 20px 24px; overflow-y: auto; flex: 1;
+      color: #cbd5e1; font-size: 14px; line-height: 1.7;
+    }
+    .doc-viewer-content h1 { font-size: 22px; color: #e0e0e0; margin: 16px 0 8px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+    .doc-viewer-content h2 { font-size: 18px; color: #e0e0e0; margin: 14px 0 6px; }
+    .doc-viewer-content h3 { font-size: 15px; color: #e0e0e0; margin: 12px 0 4px; }
+    .doc-viewer-content p { margin: 8px 0; }
+    .doc-viewer-content ul, .doc-viewer-content ol { margin: 8px 0; padding-left: 24px; }
+    .doc-viewer-content li { margin: 3px 0; }
+    .doc-viewer-content code { background: #0f172a; padding: 2px 6px; border-radius: 4px; font-size: 13px; color: #93c5fd; }
+    .doc-viewer-content pre { background: #0f172a; padding: 12px 16px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
+    .doc-viewer-content pre code { background: none; padding: 0; }
+    .doc-viewer-content blockquote { border-left: 3px solid #3b82f6; padding-left: 12px; margin: 8px 0; color: #94a3b8; }
+    .doc-viewer-content a { color: #3b82f6; text-decoration: none; }
+    .doc-viewer-content a:hover { text-decoration: underline; }
+    .doc-viewer-content table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+    .doc-viewer-content th, .doc-viewer-content td { border: 1px solid #333; padding: 6px 10px; text-align: left; font-size: 13px; }
+    .doc-viewer-content th { background: #0f172a; color: #e0e0e0; }
+    .doc-link { color: #3b82f6; text-decoration: none; cursor: pointer; }
+    .doc-link:hover { text-decoration: underline; }
+
+/* ══════════════════════════════════════════════════════════
+   LCARS THEME — Star Trek TNG
+   ══════════════════════════════════════════════════════════ */
+body.lcars {
+  font-family: 'Arial Narrow', 'Helvetica Neue', Impact, sans-serif;
+  letter-spacing: 0.08em;
+}
+body.lcars .header,
+body.lcars .supervisor-bar,
+body.lcars .term-tab-bar,
+body.lcars .sv-panel-hdr,
+body.lcars .filter-bar,
+body.lcars .term-statusbar,
+body.lcars .btn,
+body.lcars .filter-btn,
+body.lcars .ops-tab,
+body.lcars .badge,
+body.lcars .coord-status,
+body.lcars .eval-filter-btn,
+body.lcars .eval-filter-select,
+body.lcars .tc-tab,
+body.lcars .view-tab,
+body.lcars .term-tab,
+body.lcars .term-new-btn,
+body.lcars .sv-panel-badge,
+body.lcars .sv-panel-toggle,
+body.lcars #themeToggle {
+  text-transform: uppercase;
+}
+body.lcars .header {
+  border-bottom: 4px solid var(--accent);
+  border-radius: 0 0 20px 0;
+}
+body.lcars .header h1 { font-weight: 400; letter-spacing: 0.15em; }
+body.lcars .supervisor-bar {
+  border-bottom: 3px solid var(--blue);
+  background: var(--surface);
+}
+body.lcars .sv-panel {
+  background: var(--bg);
+  border: 2px solid var(--accent);
+  border-radius: 20px 0 0 20px;
+  box-shadow: none;
+}
+body.lcars .sv-panel-hdr { border-radius: 18px 0 0 0; }
+body.lcars .sv-panel-hdr h3 {
+  color: var(--bg);
+  background: var(--accent);
+  padding: 4px 16px 4px 12px;
+  border-radius: 12px 0 0 12px;
+  font-weight: 400;
+  display: inline-block;
+}
+body.lcars .sv-panel:nth-child(2) .sv-panel-hdr h3 { background: var(--green); }
+body.lcars .sv-panel:nth-child(3) .sv-panel-hdr h3 { background: var(--blue); }
+body.lcars .sv-panel:nth-child(4) .sv-panel-hdr h3 { background: var(--yellow); }
+body.lcars .sv-panel:nth-child(5) .sv-panel-hdr h3 { background: var(--green); }
+body.lcars .sv-panel-body.open {
+  border-left: 8px solid var(--accent);
+  margin-left: 12px;
+}
+body.lcars .sv-panel:nth-child(2) .sv-panel-body.open { border-left-color: var(--green); }
+body.lcars .sv-panel:nth-child(3) .sv-panel-body.open { border-left-color: var(--blue); }
+body.lcars .sv-panel:nth-child(4) .sv-panel-body.open { border-left-color: var(--yellow); }
+body.lcars .sv-panel:nth-child(5) .sv-panel-body.open { border-left-color: var(--green); }
+body.lcars .sv-panel-badge { background: var(--blue); color: var(--bg); border-radius: 8px; font-weight: 700; }
+body.lcars .sv-panel-toggle { color: var(--accent); }
+body.lcars .term-tab-bar {
+  background: var(--bg);
+  border-bottom: 3px solid var(--yellow);
+  gap: 4px;
+  padding: 4px 8px;
+}
+body.lcars .term-tab {
+  border-radius: 12px 0 0 12px;
+  border: 1px solid var(--blue);
+  color: var(--blue);
+}
+body.lcars .term-tab:hover { background: rgba(96,165,250,0.15); color: var(--accent); }
+body.lcars .term-tab.active {
+  background: var(--blue);
+  color: var(--bg);
+  border-color: var(--blue);
+}
+body.lcars .term-new-btn { color: var(--yellow); font-weight: 400; }
+body.lcars .terminal-panel {
+  border: 2px solid var(--accent);
+  border-radius: 0 20px 20px 0;
+  margin: 4px 0 4px 4px;
+}
+body.lcars .term-tab-bar { border-radius: 0 18px 0 0; }
+body.lcars .term-statusbar { border-radius: 0 0 18px 0; }
+body.lcars .term-container { background: var(--bg); }
+body.lcars .term-statusbar { background: var(--surface); border-top: 2px solid var(--accent); }
+body.lcars .term-container::before,
+body.lcars .term-container::after {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-color: var(--accent);
+  border-style: solid;
+  z-index: 5;
+  pointer-events: none;
+}
+body.lcars .term-container::before {
+  top: 4px; left: 4px;
+  border-width: 2px 0 0 2px;
+}
+body.lcars .term-container::after {
+  bottom: 4px; right: 4px;
+  border-width: 0 2px 2px 0;
+}
+body.lcars .btn { border-radius: 20px; font-weight: 400; letter-spacing: 0.1em; }
+body.lcars .btn-yes { background: var(--green); color: var(--bg); }
+body.lcars .btn-no { background: var(--red); color: var(--bg); }
+body.lcars .btn-override { border-color: var(--yellow); color: var(--yellow); border-radius: 20px; }
+body.lcars .filter-btn { border-radius: 12px 0 0 12px; border-color: var(--blue); color: var(--blue); }
+body.lcars .filter-btn.active { background: var(--blue); color: var(--bg); border-color: var(--blue); }
+body.lcars .ops-tab { background: var(--surface2); border: 1px solid var(--blue); color: var(--blue); border-radius: 10px 0 0 10px; }
+body.lcars .ops-tab.active { background: var(--blue); border-color: var(--blue); color: var(--bg); }
+body.lcars .panel-divider {
+  width: 10px;
+  background: var(--accent);
+  border-radius: 5px 0 0 5px;
+}
+body.lcars .panel-divider:hover, body.lcars .panel-divider.dragging { background: var(--yellow); }
+body.lcars .panel-divider::after { display: none; }
+body.lcars .panel-divider-h { height: 10px; background: var(--blue); }
+body.lcars .panel-divider-h::after { display: none; }
+body.lcars .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+body.lcars .dot.off { background: var(--red); }
+body.lcars .card {
+  border-radius: 0;
+  border: 1px solid var(--yellow);
+  box-shadow: none;
+  position: relative;
+}
+body.lcars .card::before {
+  content: '';
+  position: absolute;
+  top: -1px; left: -1px;
+  width: 16px; height: 16px;
+  border-top: 3px solid var(--accent);
+  border-left: 3px solid var(--accent);
+  pointer-events: none;
+}
+body.lcars .card::after {
+  content: '';
+  position: absolute;
+  bottom: -1px; right: -1px;
+  width: 16px; height: 16px;
+  border-bottom: 3px solid var(--accent);
+  border-right: 3px solid var(--accent);
+  pointer-events: none;
+}
+body.lcars .card .summary { color: var(--yellow); background: rgba(196,149,106,0.08); }
+body.lcars .card .id { color: var(--blue); }
+body.lcars .card .time { color: var(--blue); }
+body.lcars .ai-reason { background: rgba(96,165,250,0.1); border-left-color: var(--blue); color: var(--green); }
+body.lcars .ai-badge.approved { background: var(--green); color: var(--bg); }
+body.lcars .ai-badge.denied { background: var(--red); color: var(--bg); }
+body.lcars .ai-badge.evaluating { background: var(--blue); color: var(--bg); }
+body.lcars .approval-scroll { scrollbar-color: var(--accent) var(--bg); padding-bottom: 20px; }
+body.lcars .approval-scroll::-webkit-scrollbar-track { background: var(--bg); }
+body.lcars .approval-scroll::-webkit-scrollbar-thumb { background: var(--accent); }
+body.lcars .sv-panel-body.open { scrollbar-color: var(--blue) var(--bg); }
+body.lcars .sv-panel-body.open::-webkit-scrollbar-track { background: var(--bg); }
+body.lcars .sv-panel-body.open::-webkit-scrollbar-thumb { background: var(--blue); }
+body.lcars .coord-request { border-top-color: var(--border); }
+body.lcars .coord-request-desc { color: var(--accent); }
+body.lcars .coord-request-meta { color: var(--blue); }
+body.lcars .coord-status.pending { background: var(--surface); color: var(--blue); }
+body.lcars .coord-status.dispatched,
+body.lcars .coord-status.completed { background: var(--bg); color: var(--green); }
+body.lcars .coord-status.running { background: var(--surface); color: var(--blue); }
+body.lcars .coord-status.failed { background: var(--bg); color: var(--red); }
+body.lcars .coord-status.timeout { background: var(--bg); color: var(--yellow); }
+body.lcars .coord-btn { background: var(--surface2); border-color: var(--blue); color: var(--blue); }
+body.lcars .coord-btn:hover { background: var(--surface); color: var(--accent); }
+body.lcars .coord-result { background: var(--surface); color: var(--green); }
+body.lcars .coord-progress-bar-wrap { background: var(--surface2); }
+body.lcars .coord-progress-bar { background: var(--blue); }
+body.lcars .eval-filter-select { background: var(--surface2); color: var(--accent); border-color: var(--blue); }
+body.lcars .eval-filter-btn { background: var(--surface2); color: var(--blue); border-color: var(--blue); }
+body.lcars .eval-filter-btn.active { background: var(--blue); color: var(--bg); border-color: var(--blue); }
+body.lcars .eval-entry { border-top-color: var(--border); }
+body.lcars .eval-entry.approved { border-left-color: var(--green); }
+body.lcars .eval-entry.denied { border-left-color: var(--red); }
+body.lcars .eval-entry-tool { color: var(--blue); }
+body.lcars .eval-entry-expand { background: var(--surface); color: var(--accent); }
+body.lcars .conf-high { color: var(--green); }
+body.lcars .conf-mid { color: var(--yellow); }
+body.lcars .conf-low { color: var(--red); }
+body.lcars .tc-room-bar select { background: var(--surface2); border-color: var(--blue); color: var(--accent); }
+body.lcars .tc-tab { background: var(--surface2); border-color: var(--blue); color: var(--blue); }
+body.lcars .tc-tab.active { background: var(--blue); border-color: var(--blue); color: var(--bg); }
+body.lcars #teamChatMsgs, body.lcars #tcAgentMsgs { background: var(--bg); border-color: var(--border); }
+body.lcars .tc-msg { background: var(--surface2); }
+body.lcars .tc-msg.mine { background: var(--surface); }
+body.lcars .tc-msg.agent { background: var(--surface2); border-left-color: var(--green); }
+body.lcars .tc-msg-text { color: var(--accent); }
+body.lcars .tc-input input { background: var(--surface2); border-color: var(--blue); color: var(--accent); }
+body.lcars .tc-input input:focus { border-color: var(--accent); }
+body.lcars .tc-input button { background: var(--blue); color: var(--bg); }
+body.lcars .tc-input button:hover { background: var(--green); }
+body.lcars .doc-viewer { background: var(--bg); border-color: var(--accent); border-radius: 20px 0 0 20px; }
+body.lcars .doc-viewer-hdr { border-bottom-color: var(--accent); }
+body.lcars .doc-viewer-content code { background: var(--surface2); color: var(--blue); }
+body.lcars .doc-viewer-content pre { background: var(--surface); }
+body.lcars .dialog { border-color: var(--accent); border-radius: 20px 0 0 20px; }
+body.lcars .project-row:hover { background: rgba(196,149,106,0.1); }
+body.lcars .version-banner { background: var(--surface); border-bottom-color: var(--blue); }
+body.lcars .compaction-banner { background: var(--surface); border-color: var(--yellow); color: var(--yellow); box-shadow: none; }
+body.lcars .question-overlay { border-color: var(--accent); }
+body.lcars .drop-overlay { background: rgba(15,17,23,0.9); border-color: var(--accent); color: var(--accent); }
+@keyframes lcars-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+body.lcars .dot.on { animation: lcars-pulse 2s ease-in-out infinite; }
+@media (max-width: 900px) {
+  body.lcars .view-tab { border-radius: 12px 0 0 12px; border-color: var(--blue); }
+  body.lcars .view-tab.active { background: var(--blue); color: var(--bg); border-color: var(--blue); }
+}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div style="display:flex;align-items:center">
+      <h1>Claude Supervisor</h1>
+      <span class="badge" id="badge">0</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <button id="themeToggle" onclick="toggleTheme()" style="font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:10px;padding:1px 8px;background:transparent;cursor:pointer;opacity:0.7" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'" title="Toggle LCARS theme">LCARS</button>
+      <a href="/docs/usage-guide.html" target="_blank" onclick="window.open('/docs/usage-guide.html','_blank');return false;" style="font-size:11px;color:var(--muted);text-decoration:none;border:1px solid var(--border);border-radius:10px;padding:1px 8px;opacity:0.7" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'">Guide</a>
+      <span><span class="dot off" id="dot"></span><span style="font-size:12px;color:var(--muted)" id="conn">Offline</span></span>
+    </div>
+  </div>
+
+  <div class="supervisor-bar" id="supervisorBar" style="display:none">
+    <div>AI Supervisor: <span class="mode-label" id="supervisorMode">---</span></div>
+    <div id="claudeStatus" style="cursor:pointer" onclick="toggleStatusDetail()" title="Claude API Status"></div>
+    <div style="display:inline-flex;align-items:center;gap:4px;cursor:pointer" onclick="togglePendingChanges()"><span id="pendingBadge" style="display:none;background:#b8860b;color:#fff;font-size:10px;padding:1px 5px;border-radius:8px;font-weight:bold"></span><span id="supervisorStats" style="position:relative"></span></div>
+    <div id="pendingChangesPopup" style="display:none;position:absolute;bottom:32px;right:8px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:12px;max-width:450px;max-height:300px;overflow-y:auto;z-index:999;white-space:pre-line;line-height:1.5;box-shadow:0 4px 12px rgba(0,0,0,.4)"></div>
+  </div>
+  <div id="statusDetail" style="display:none;padding:8px 16px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.6"></div>
+
+  <!-- Mobile view toggle -->
+  <div class="view-toggle" id="viewToggle">
+    <div class="view-toggle-inner">
+      <button class="view-tab active" id="viewTabTerminals" onclick="setMobileView('terminals')">Terminals</button>
+      <button class="view-tab" id="viewTabApprovals" onclick="setMobileView('approvals')">Approvals <span class="tab-badge" id="approvalTabBadge">0</span></button>
+    </div>
+  </div>
+
+  <div class="main-split">
+    <!-- Terminal panel (left on desktop, toggled on mobile) -->
+    <div class="terminal-panel" id="terminalPanel">
+      <div class="term-tab-bar" id="termTabBar">
+        <button class="term-new-btn" onclick="showNewTerminalDialog()">+ New</button>
+        <button class="mobile-paste-btn" id="mobilePasteBtn" onclick="mobilePaste()" title="Paste from clipboard">Paste</button>
+      </div>
+      <!-- Version update banner -->
+      <div class="version-banner" id="versionBanner">
+        <span class="ver-text">
+          Update available: <span class="ver-old" id="verOld"></span>
+          <span class="ver-arrow">&rarr;</span>
+          <span class="ver-new" id="verNew"></span>
+        </span>
+        <button class="ver-btn" onclick="showReleaseNotes()">What's New</button>
+        <button class="ver-btn update-btn" onclick="startUpdate()">Save &amp; Update</button>
+        <button class="ver-btn dismiss-btn" onclick="dismissVersionBanner()">Dismiss</button>
+      </div>
+      <div class="rescue-bar" id="rescueBar">
+        <span class="rescue-text">Session appears stuck — Claude may be blocked on a long-running task</span>
+        <button class="rescue-btn" onclick="rescueSession()">Send Escape</button>
+      </div>
+      <div class="term-container" id="termContainer">
+        <div class="term-empty" id="termEmpty">Click + New to launch a Claude session</div>
+        <div class="drop-overlay" id="dropOverlay">Drop file here</div>
+      </div>
+      <div class="term-statusbar" id="termStatusbar">
+        <span id="termStatusRole"></span>
+        <span id="termStatusProject"></span>
+        <div class="term-actions-bar" id="termActionsBar" style="display:none">
+          <button class="term-action-btn restart" id="restartBtn" onclick="restartActiveTerminal()" title="Restart this Claude session">Restart Session</button>
+          <button class="term-action-btn" onclick="teardownActiveProject()" title="Remove supervisor hooks from this project" style="color:var(--red)">Remove Hooks</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Draggable divider -->
+    <div class="panel-divider" id="panelDivider"></div>
+
+    <!-- Approval panel (right on desktop, toggled on mobile) -->
+    <div class="approval-panel hidden-mobile" id="approvalPanel">
+      <div class="filter-bar" id="filterBar">
+        <button class="filter-btn active" data-project="all" onclick="setFilter('all')">All</button>
+      </div>
+
+      <div class="approval-scroll">
+        <!-- Pending Approvals Panel -->
+        <div class="sv-panel" data-panel="approvals" draggable="false">
+          <div class="sv-panel-hdr" onclick="togglePanel('approvals')">
+            <div style="display:flex;align-items:center;gap:8px">
+              <h3>Pending Approvals</h3>
+              <span class="sv-panel-badge" id="approvalsBadge">0</span>
+            </div>
+            <span class="sv-panel-toggle" id="approvalsToggle">&#9660;</span>
+          </div>
+          <div class="sv-panel-body open" id="approvalsBody" style="padding:12px 16px">
+            <div id="cards"><div class="empty">No pending approvals</div></div>
+          </div>
+        </div>
+
+        <!-- Operations Panel (Tasks + Feed) -->
+        <div class="sv-panel" data-panel="operations" draggable="false">
+          <div class="sv-panel-hdr" onclick="togglePanel('operations')">
+            <div style="display:flex;align-items:center;gap:8px">
+              <h3>Operations</h3>
+              <span class="sv-panel-badge" id="operationsBadge">0</span>
+              <span class="coordinator-instance" id="coordinatorInstance"></span>
+            </div>
+            <span class="sv-panel-toggle" id="operationsToggle">&#9660;</span>
+          </div>
+          <div class="sv-panel-body open" id="operationsBody">
+            <div class="ops-tabs">
+              <button class="ops-tab active" id="opsTabTasks" onclick="switchOpsTab('tasks')">Tasks</button>
+              <button class="ops-tab" id="opsTabFeed" onclick="switchOpsTab('feed')">Feed</button>
+            </div>
+            <div class="ops-pane active" id="opsPaneTasks">
+              <div id="coordinatorRequests">
+                <div class="coord-empty" id="coordinatorEmpty">No active tasks</div>
+              </div>
+            </div>
+            <div class="ops-pane" id="opsPaneFeed">
+              <div id="agentTasks"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Eval History Panel -->
+        <div class="sv-panel" data-panel="evalHistory" draggable="false">
+          <div class="sv-panel-hdr" onclick="togglePanel('evalHistory')">
+            <div style="display:flex;align-items:center;gap:8px">
+              <h3>Eval History</h3>
+              <span class="sv-panel-badge" id="evalHistoryBadge">0</span>
+            </div>
+            <span class="sv-panel-toggle" id="evalHistoryToggle">&#9654;</span>
+          </div>
+          <div class="sv-panel-body" id="evalHistoryBody">
+            <div class="eval-history-filter-bar">
+              <select class="eval-filter-select" id="evalProjFilter" onchange="applyEvalFilters()">
+                <option value="">All Projects</option>
+              </select>
+              <button class="eval-filter-btn active" id="evalDecAll"   onclick="setEvalDecision('')">All</button>
+              <button class="eval-filter-btn"        id="evalDecAppr"  onclick="setEvalDecision('approved')">Approved</button>
+              <button class="eval-filter-btn"        id="evalDecDeny"  onclick="setEvalDecision('denied')">Denied</button>
+              <button class="eval-filter-btn refresh" onclick="fetchEvalHistory(true)">Refresh</button>
+            </div>
+            <div id="evalHistoryList"><div style="padding:12px 16px;color:#555;font-size:12px;">Loading...</div></div>
+          </div>
+        </div>
+
+        <!-- Activity Log Panel -->
+        <div class="sv-panel" data-panel="activityLog" draggable="false">
+          <div class="sv-panel-hdr" onclick="togglePanel('activityLog')">
+            <div style="display:flex;align-items:center;gap:8px">
+              <h3>Activity Log</h3>
+              <span class="sv-panel-badge" id="activityLogBadge">0</span>
+            </div>
+            <span class="sv-panel-toggle" id="activityLogToggle">&#9654;</span>
+          </div>
+          <div class="sv-panel-body" id="activityLogBody">
+            <div id="log"></div>
+          </div>
+        </div>
+
+        <!-- Team Chat Panel -->
+        <div class="sv-panel" data-panel="teamChat" draggable="false">
+          <div class="sv-panel-hdr" onclick="togglePanel('teamChat')">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <h3>Team Chat</h3>
+              <span class="sv-panel-badge team-chat-count" id="tcBadge">0</span>
+              <span id="tcUnreadRooms" style="display:flex;gap:4px;flex-wrap:wrap"></span>
+            </div>
+            <span class="sv-panel-toggle" id="tcToggle">&#9654;</span>
+          </div>
+          <div class="sv-panel-body" id="teamChatBody">
+            <div class="tc-room-bar">
+              <select id="tcRoomSelect" onchange="switchTcRoom()"></select>
+              <div class="tc-tabs">
+                <button class="tc-tab active" data-tab="human" onclick="switchTcTab('human')">Human</button>
+                <button class="tc-tab" data-tab="agent" onclick="switchTcTab('agent')">Agent</button>
+              </div>
+            </div>
+            <div id="tcHumanPane" class="tc-pane">
+              <div id="teamChatMsgs"></div>
+            </div>
+            <div id="tcAgentPane" class="tc-pane" style="display:none">
+              <div id="tcAgentMsgs"></div>
+            </div>
+            <div class="tc-input" id="tcInputBar">
+              <input type="text" id="tcInput" placeholder="Message..." maxlength="2000"
+                onkeydown="if(event.key==='Enter')sendTeamChat()" />
+              <button onclick="sendTeamChat()">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Release Notes Modal -->
+  <div class="dialog-overlay" id="releaseNotesOverlay">
+    <div class="release-notes-dialog">
+      <div class="dialog-header">
+        <h2>What's New <span id="releaseVersion" style="font-size:12px;color:var(--muted);font-weight:400"></span></h2>
+        <button class="dialog-close" onclick="closeReleaseNotes()">&times;</button>
+      </div>
+      <div class="release-notes-body" id="releaseNotesBody">
+        <div class="dialog-loading">Loading release notes...</div>
+      </div>
+      <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <a id="releaseGhLink" href="#" target="_blank" style="font-size:12px;color:var(--blue)">View on GitHub</a>
+        <button class="ver-btn update-btn" onclick="startUpdate();closeReleaseNotes()">Save &amp; Update</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Document Viewer Modal -->
+  <div class="dialog-overlay" id="docViewerOverlay" style="display:none">
+    <div class="doc-viewer">
+      <div class="doc-viewer-hdr">
+        <div class="doc-viewer-title">
+          <span class="doc-viewer-proj" id="docViewerProj"></span>
+          <span class="doc-viewer-name" id="docViewerName"></span>
+        </div>
+        <button class="doc-viewer-close" onclick="closeDocViewer()">&times;</button>
+      </div>
+      <div class="doc-viewer-content" id="docViewerContent"></div>
+    </div>
+  </div>
+
+  <!-- New Terminal Dialog -->
+  <div class="dialog-overlay" id="newTermDialog">
+    <div class="dialog">
+      <div class="dialog-header">
+        <h2>New Terminal</h2>
+        <button class="dialog-close" onclick="closeNewTerminalDialog()">&times;</button>
+      </div>
+      <div class="dialog-body" id="projectList">
+        <div class="dialog-loading">Loading projects...</div>
+      </div>
+    </div>
+  </div>
+
+<!-- Question Answer Overlay -->
+<div class="question-overlay" id="questionOverlay">
+  <div class="question-dialog">
+    <div class="question-header">
+      <h2>Claude is asking a question <span class="question-proj-badge" id="questionProjBadge"></span></h2>
+      <button class="dialog-close" onclick="dismissQuestion()">&times;</button>
+    </div>
+    <div class="question-body" id="questionBody"></div>
+    <div class="question-footer">
+      <button class="question-ai-btn" id="questionAiBtn" onclick="letAIDecideQuestion()">Let AI Decide</button>
+      <button class="question-skip-btn" onclick="dismissQuestion()">Dismiss</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── Theme Toggle ──────────────────────────────────────── */
+function toggleTheme() {
+  const isLcars = document.body.classList.toggle('lcars');
+  localStorage.setItem('sv-theme', isLcars ? 'lcars' : 'default');
+  document.getElementById('themeToggle').textContent = isLcars ? 'DEFAULT' : 'LCARS';
+  // No xterm theme change needed — LCARS uses the same color scheme as default
+}
+(function() {
+  if (localStorage.getItem('sv-theme') === 'lcars') {
+    document.body.classList.add('lcars');
+    requestAnimationFrame(() => {
+      const btn = document.getElementById('themeToggle');
+      if (btn) btn.textContent = 'DEFAULT';
+    });
+  }
+})();
+
+/* ── State ──────────────────────────────────────────────── */
+let ws, reconnectTimer;
+const cards = document.getElementById('cards');
+const logEl = document.getElementById('log');
+const dot = document.getElementById('dot');
+const conn = document.getElementById('conn');
+const badge = document.getElementById('badge');
+const filterBar = document.getElementById('filterBar');
+let activeFilter = 'all';
+const knownProjects = new Set();
+let claudeVersionInfo = { installed: null, latest: null, updateAvailable: false };
+let versionBannerDismissed = false;
+
+let mobileView = 'terminals';
+
+/* ── Terminal state ─────────────────────────────────────── */
+const terminalTabs = new Map(); // terminalId -> {xterm, fitAddon, project, status, isController}
+let activeTerminalId = null;
+let previouslySubscribed = new Set(); // for reconnect
+
+/* ── Stuck session detection ───────────────────────── */
+let lastTerminalOutput = {};  // terminalId -> timestamp
+let userSentInput = {};       // terminalId -> timestamp
+let rescueTerminalId = null;
+
+const COLORS = ['#60a5fa','#f472b6','#a78bfa','#34d399','#fb923c','#facc15','#f87171','#22d3ee'];
+function projColor(name) {
+  if (!name || name === 'unknown') return '#71717a';
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
+  return COLORS[Math.abs(h) % COLORS.length];
+}
+
+/* ── Mobile view toggle ─────────────────────────────────── */
+function setMobileView(view) {
+  mobileView = view;
+  const tp = document.getElementById('terminalPanel');
+  const ap = document.getElementById('approvalPanel');
+  const vtT = document.getElementById('viewTabTerminals');
+  const vtA = document.getElementById('viewTabApprovals');
+
+  if (view === 'terminals') {
+    tp.classList.remove('hidden-mobile');
+    ap.classList.add('hidden-mobile');
+    vtT.classList.add('active');
+    vtA.classList.remove('active');
+    fitActiveTerminal();
+  } else {
+    tp.classList.add('hidden-mobile');
+    ap.classList.remove('hidden-mobile');
+    vtT.classList.remove('active');
+    vtA.classList.add('active');
+  }
+}
+
+function updateApprovalTabBadge() {
+  const v = cards.querySelectorAll('.card:not(.hidden):not(.ai-resolved)').length;
+  const tb = document.getElementById('approvalTabBadge');
+  tb.textContent = v;
+  tb.className = v > 0 ? 'tab-badge show' : 'tab-badge';
+}
+
+/* ── WebSocket ──────────────────────────────────────────── */
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host);
+  ws.onopen = () => {
+    dot.className = 'dot on'; conn.textContent = 'Online';
+    clearTimeout(reconnectTimer);
+    // Re-subscribe to previously open terminals on reconnect.
+    // Subscribe FIRST (capture at current tmux dims), then resize.
+    // Mark as reconnect so server can skip scrollback replay if terminal already has content.
+    for (const id of previouslySubscribed) {
+      const tab = terminalTabs.get(id);
+      if (tab && ws && ws.readyState === 1) {
+        tab._subscribed = false;
+        const hasContent = tab.xterm && tab.xterm.buffer && tab.xterm.buffer.active.length > 1;
+        ws.send(JSON.stringify({ type: 'terminal_subscribe', terminalId: id, skipScrollback: hasContent }));
+        tab._subscribed = true;
+      }
+    }
+    // Now fit and resize after subscriptions are sent
+    requestAnimationFrame(() => {
+      for (const id of previouslySubscribed) {
+        const tab = terminalTabs.get(id);
+        if (tab) {
+          try { safeFit(tab); sendTerminalResize(id); } catch(e) { console.warn('Resize error on reconnect:', e); }
+        }
+      }
+    });
+  };
+  ws.onclose = () => {
+    dot.className = 'dot off'; conn.textContent = 'Offline';
+    reconnectTimer = setTimeout(connect, 3000);
+  };
+  ws.onmessage = e => handle(JSON.parse(e.data));
+}
+
+function handle(msg) {
+  switch(msg.type) {
+    case 'init':
+      if (msg.supervisor) {
+        const bar = document.getElementById('supervisorBar');
+        bar.style.display = 'flex';
+        const m = document.getElementById('supervisorMode');
+        m.textContent = msg.supervisor.mode;
+        m.className = 'mode-label ' + msg.supervisor.mode;
+        const sv = msg.supervisor;
+        let backendLabel;
+        if (sv.evalBackend === 'ollama') {
+          backendLabel = 'ollama (' + sv.ollamaModel + ')';
+        } else {
+          backendLabel = sv.model + ' / ' + sv.fastModel;
+        }
+        window._evalBackendLabel = backendLabel;
+        window._svVersion = sv.version;
+        window._confidenceThreshold = sv.confidenceThreshold;
+        if (msg.evalStats) {
+          updateEvalStats(msg.evalStats, msg.serverStartedAt);
+        } else {
+          document.getElementById('supervisorStats').textContent =
+            sv.version + ' \u2502 ' + backendLabel + ' \u2502 threshold ' + (sv.confidenceThreshold*100) + '%';
+        }
+        // Check for pending code changes
+        checkPendingChanges();
+      }
+      if (msg.claudeStatus) updateClaudeStatus(msg.claudeStatus);
+      (msg.projects || []).forEach(p => addProjectFilter(p));
+      renderCards([...(msg.pending || []), ...(msg.aiResolved || [])]);
+      (msg.recentLogs || []).forEach(addLog);
+      if (msg.pendingQuestions) {
+        for (const q of msg.pendingQuestions) showQuestion(q);
+      }
+      // Show existing terminals in the tab bar
+      if (msg.terminals && msg.terminals.length > 0) {
+        for (const t of msg.terminals) {
+          if (!terminalTabs.has(t.id)) {
+            openTerminalTab(t.id, t.project, t.status);
+            const tab = terminalTabs.get(t.id);
+            if (tab && t.turnCount) tab.turnCount = t.turnCount;
+            if (tab && t.claudeVersion) tab.claudeVersion = t.claudeVersion;
+            if (tab && t.contextPercent != null) tab.contextPercent = t.contextPercent;
+            if (tab) tab.snapshotSaved = !!t.snapshotSaved;
+          }
+          // Extract rate limits from terminal data (most recent wins)
+          if (t.rateLimits) {
+            window._lastRateLimits = t.rateLimits;
+          }
+        }
+        renderTerminalTabs();
+      }
+      if (msg.agentMessages) {
+        msg.agentMessages.forEach(m => handleAgentMessage(m));
+      }
+      if (msg.teamChat) {
+        // New format: object of rooms -> messages[]
+        if (Array.isArray(msg.teamChat)) {
+          // Legacy flat array
+          for (const m of msg.teamChat) addTcMsg(m);
+        } else {
+          for (const [room, msgs] of Object.entries(msg.teamChat)) {
+            for (const m of msgs) addTcMsg(m);
+          }
+          updateTcRoomSelect();
+        }
+      }
+      if (msg.coordinatorInstance && !tcUser) {
+        tcUser = msg.coordinatorInstance;
+        localStorage.setItem('sv_chat_user', tcUser);
+      }
+      if (msg.coordinatorRequests) {
+        msg.coordinatorRequests.forEach(r => handleCoordinatorRequest(r));
+      }
+      if (msg.coordinatorHistory) {
+        msg.coordinatorHistory.forEach(r => handleCoordinatorRequest(r));
+      }
+      if (msg.coordinatorInstance) {
+        coordinatorInstance = msg.coordinatorInstance;
+      }
+      if (msg.claudeVersion) updateVersionBanner(msg.claudeVersion);
+      if (msg.usage) {
+        updateUsageDisplay(msg.usage.aggregate);
+      }
+      if (msg.globalRateLimits) {
+        window._globalRateLimits = msg.globalRateLimits;
+        if (window._lastEvalStats) updateEvalStats(window._lastEvalStats, _serverStartedAt);
+      }
+      break;
+    case 'team_chat': {
+      addTcMsg(msg);
+      const chatRoom = msg.project || 'general';
+      const isVisible = panelState.teamChat && tcRoom === chatRoom && tcTab === 'human';
+      if (!isVisible) {
+        tcUnread++;
+        tcUnreadRooms.set(chatRoom, (tcUnreadRooms.get(chatRoom) || 0) + 1);
+        updateTcBadge();
+      }
+      break;
+    }
+    case 'approval_request':
+      if (msg.approval.project) addProjectFilter(msg.approval.project);
+      addCard(msg.approval);
+      if (msg.approval.aiStatus !== 'evaluating' && navigator.vibrate) navigator.vibrate([100,50,100]);
+      break;
+    case 'approval_resolved':
+      if (msg.decidedBy === 'ai') { markCardAiResolved(msg.id, msg.status); }
+      else { removeCard(msg.id); }
+      handleEvalResolved(msg);
+      break;
+    case 'ai_recommendation':
+      updateCardAI(msg.id, msg.aiDecision);
+      break;
+    case 'ai_error':
+      updateCardAIError(msg.id);
+      break;
+    case 'log':
+      if (msg.entry.project) addProjectFilter(msg.entry.project);
+      addLog(msg.entry);
+      break;
+    case 'notification':
+      if (msg.project) addProjectFilter(msg.project);
+      addLog({ timestamp: new Date().toISOString(), level: msg.level === 'critical' ? 'error' : msg.level === 'warning' ? 'warn' : 'notify', message: msg.message, project: msg.project });
+      if (msg.level === 'critical' || msg.level === 'warning') {
+        if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+      } else {
+        if (navigator.vibrate) navigator.vibrate(200);
+      }
+      break;
+
+    case 'claude_status':
+      updateClaudeStatus(msg);
+      break;
+
+    case 'eval_stats':
+      updateEvalStats(msg.stats, msg.serverStartedAt);
+      break;
+
+    case 'rate_limits':
+      window._lastRateLimits = msg.rateLimits;
+      if (window._lastEvalStats) updateEvalStats(window._lastEvalStats, _serverStartedAt);
+      break;
+
+    case 'global_rate_limits':
+      window._globalRateLimits = msg.limits;
+      if (window._lastEvalStats) updateEvalStats(window._lastEvalStats, _serverStartedAt);
+      break;
+
+    case 'usage_update':
+      updateUsageDisplay(msg.aggregate);
+      break;
+
+    /* ── Question messages ─────────────────────────── */
+    case 'question_request':
+      showQuestion(msg.question);
+      break;
+    case 'question_answered':
+      closeQuestionOverlay(msg.id);
+      break;
+    case 'question_ai_evaluating':
+      if (activeQuestionId === msg.id) {
+        const btn = document.getElementById('questionAiBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'AI thinking...'; }
+      }
+      break;
+    case 'question_ai_answered':
+      closeQuestionOverlay(msg.id);
+      break;
+    case 'question_ai_error':
+      if (activeQuestionId === msg.id) {
+        const btn = document.getElementById('questionAiBtn');
+        if (btn) { btn.disabled = false; btn.textContent = 'AI Failed \u2014 Retry'; }
+      }
+      break;
+    case 'question_completed':
+      addLog({ timestamp: new Date().toISOString(), level: 'ok', message: 'Question #' + msg.id + ' answered successfully' });
+      break;
+    case 'question_failed':
+      addLog({ timestamp: new Date().toISOString(), level: 'error', message: 'Question #' + msg.id + ' failed: ' + msg.reason });
+      break;
+
+    /* ── Terminal messages ──────────────────────────── */
+    case 'terminal_data': {
+      const tab = terminalTabs.get(msg.terminalId);
+      if (tab && tab.xterm) {
+        tab.xterm.write(msg.data);
+        lastTerminalOutput[msg.terminalId] = Date.now();
+        userSentInput[msg.terminalId] = 0;
+      }
+      break;
+    }
+    case 'terminal_scrollback': {
+      const tab = terminalTabs.get(msg.terminalId);
+      if (tab && tab.xterm) {
+        // Raw dtach output — write directly. Even if Claude repaints after
+        // resize, this data will be in xterm's scrollback buffer (scrollable).
+        tab.xterm.write(msg.data);
+        lastTerminalOutput[msg.terminalId] = Date.now();
+      }
+      break;
+    }
+    case 'terminal_exit': {
+      const tab = terminalTabs.get(msg.terminalId);
+      if (tab) {
+        tab.status = 'exited';
+        tab.xterm.write('\r\n\x1b[33m--- Process exited (code ' + (msg.exitCode != null ? msg.exitCode : '?') + ') ---\x1b[0m\r\n');
+        renderTerminalTabs();
+        if (activeTerminalId === msg.terminalId) updateTerminalStatusbar(msg.terminalId);
+      }
+      break;
+    }
+    case 'terminal_controller': {
+      const tab = terminalTabs.get(msg.terminalId);
+      if (tab) {
+        tab.isController = msg.isController;
+        renderTerminalTabs();
+        if (activeTerminalId === msg.terminalId) updateTerminalStatusbar(msg.terminalId);
+      }
+      break;
+    }
+    case 'terminal_closed': {
+      closeTerminalTabLocal(msg.terminalId);
+      break;
+    }
+    case 'terminal_opened': {
+      // Another client opened a terminal; add it as a tab we can connect to
+      if (msg.terminal && !terminalTabs.has(msg.terminal.id)) {
+        openTerminalTab(msg.terminal.id, msg.terminal.project, msg.terminal.status || 'running');
+      }
+      break;
+    }
+    case 'terminal_restarted': {
+      const tab = terminalTabs.get(msg.terminalId);
+      if (tab) {
+        tab.status = 'running';
+        tab.turnCount = msg.turnCount || 0;
+        tab.claudeVersion = msg.claudeVersion || claudeVersionInfo.installed;
+        tab.createdAt = msg.createdAt || new Date().toISOString();
+        tab.xterm.reset();
+        tab.xterm.write('\x1b[32m--- Session restarted ---\x1b[0m\r\n');
+        renderTerminalTabs();
+        if (activeTerminalId === msg.terminalId) updateTerminalStatusbar(msg.terminalId);
+      }
+      break;
+    }
+    case 'terminal_turn_count': {
+      const tab = terminalTabs.get(msg.terminalId);
+      if (tab) {
+        tab.turnCount = msg.turnCount;
+        renderTerminalTabs();
+        if (activeTerminalId === msg.terminalId) updateTerminalStatusbar(msg.terminalId);
+      }
+      break;
+    }
+    case 'terminal_context': {
+      const tab = terminalTabs.get(msg.terminalId);
+      if (tab) {
+        tab.contextPercent = msg.contextPercent;
+        tab.snapshotSaved = !!msg.snapshotSaved;
+        renderTerminalTabs();
+        if (activeTerminalId === msg.terminalId) updateTerminalStatusbar(msg.terminalId);
+      }
+      break;
+    }
+    case 'terminal_rescued':
+      document.getElementById('rescueBar').classList.remove('visible');
+      addLog({ timestamp: new Date().toISOString(), level: 'warn', message: 'Escape sent to rescue stuck session (terminal ' + msg.terminalId + ')' });
+      break;
+    case 'image_drop_saved':
+      addLog({ timestamp: new Date().toISOString(), level: 'info', message: 'Image saved: ' + msg.filePath });
+      break;
+    case 'file_drop_saved':
+      addLog({ timestamp: new Date().toISOString(), level: 'info', message: 'File saved: ' + msg.filePath });
+      break;
+    case 'agent_message':
+      handleAgentMessage(msg);
+      break;
+    case 'chat':
+      // Agent chat message broadcast (supervisor/{project}/chat/{room}/messages/{seq})
+      addTcAgentMsg(msg);
+      break;
+    case 'coordinator_request':
+      handleCoordinatorRequest(msg);
+      break;
+    case 'coordinator_response':
+      handleCoordinatorResponse(msg);
+      break;
+    case 'coordinator_dispatched':
+      handleCoordinatorDispatched(msg);
+      break;
+    case 'compaction_warning':
+      showCompactionWarning(msg);
+      break;
+    case 'claude_version':
+      updateVersionBanner(msg);
+      break;
+  }
+}
+
+/* ── Compaction warning ─────────────────────────────────── */
+function showCompactionWarning(msg) {
+  const existingBanner = document.getElementById('compaction-banner');
+  if (existingBanner) existingBanner.remove();
+  const banner = document.createElement('div');
+  banner.id = 'compaction-banner';
+  banner.className = 'compaction-banner';
+  banner.textContent = `Context compaction (${msg.trigger || 'unknown'}) \u2014 ${msg.project || 'unknown'}`;
+  document.body.appendChild(banner);
+  setTimeout(() => {
+    banner.style.transition = 'opacity 0.5s';
+    banner.style.opacity = '0';
+    setTimeout(() => banner.remove(), 500);
+  }, 30000);
+}
+
+/* ── Terminal functions ──────────────────────────────────── */
+function openTerminalTab(id, project, status) {
+  if (terminalTabs.has(id)) {
+    switchTerminalTab(id);
+    return;
+  }
+
+  const xterm = new Terminal({
+    cursorBlink: true,
+    fontSize: 13,
+    fontFamily: "'SF Mono', Menlo, monospace",
+    theme: { background: '#0f1117', foreground: '#e4e4e7', cursor: '#c4956a', selectionBackground: '#3a3d4a' },
+    scrollback: 50000,
+    allowProposedApi: true,
+    scrollOnUserInput: true,
+  });
+
+  const fitAddon = new FitAddon.FitAddon();
+  xterm.loadAddon(fitAddon);
+
+  const tab = {
+    xterm: xterm,
+    fitAddon: fitAddon,
+    project: project,
+    status: status || 'running',
+    isController: false,
+    turnCount: 0,
+  };
+
+  terminalTabs.set(id, tab);
+  previouslySubscribed.add(id);
+
+  // Handle input from this terminal
+  xterm.onData(data => {
+    if (tab.isController && ws && ws.readyState === 1) {
+      // Only track Enter key as "user submitted input" for stuck detection
+      if (data === '\r' || data === '\n') userSentInput[id] = Date.now();
+      ws.send(JSON.stringify({ type: 'terminal_input', terminalId: id, data: data }));
+    }
+  });
+
+  // Subscribe is deferred — switchTerminalTab will fit/resize first,
+  // then subscribe, so tmux reflows before we capture the screen.
+  switchTerminalTab(id);
+}
+
+function switchTerminalTab(id) {
+  const tab = terminalTabs.get(id);
+  if (!tab) return;
+
+  const container = document.getElementById('termContainer');
+  const emptyEl = document.getElementById('termEmpty');
+
+  // Hide all terminal wrappers
+  container.querySelectorAll('[id^="term-wrap-"]').forEach(w => w.style.display = 'none');
+
+  activeTerminalId = id;
+
+  // Reset rescue bar on tab switch
+  document.getElementById('rescueBar').classList.remove('visible');
+  rescueTerminalId = null;
+
+  // Hide empty state
+  if (emptyEl) emptyEl.style.display = 'none';
+
+  // If wrapper already exists, show it
+  let wrapper = document.getElementById('term-wrap-' + id);
+  if (wrapper) {
+    wrapper.style.display = '';
+  } else {
+    // Create a wrapper div and open xterm into it
+    wrapper = document.createElement('div');
+    wrapper.id = 'term-wrap-' + id;
+    wrapper.style.height = '100%';
+    wrapper.style.width = '100%';
+    container.appendChild(wrapper);
+    tab.xterm.open(wrapper);
+  }
+
+  // Subscribe FIRST so the server captures the tmux screen at its current
+  // dimensions (clean, no reflow). Then fit/resize so future output is at
+  // the correct size for this browser.
+  if (!tab._subscribed && ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'terminal_subscribe', terminalId: id }));
+    tab._subscribed = true;
+  }
+  requestAnimationFrame(() => {
+    try {
+      safeFit(tab);
+      sendTerminalResize(id);
+    } catch(e) {}
+    tab.xterm.focus();
+  });
+
+  renderTerminalTabs();
+  updateTerminalStatusbar(id);
+}
+
+function closeTerminalTab(id) {
+  const tab = terminalTabs.get(id);
+  if (!tab) return;
+
+  // Unsubscribe via WS
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'terminal_unsubscribe', terminalId: id }));
+  }
+
+  // Send DELETE to server
+  fetch('/api/terminals/' + id, { method: 'DELETE' }).catch(() => {});
+
+  closeTerminalTabLocal(id);
+}
+
+function closeTerminalTabLocal(id) {
+  const tab = terminalTabs.get(id);
+  if (!tab) return;
+
+  // Dispose xterm
+  try {
+    const wrapper = document.getElementById('term-wrap-' + id);
+    tab.xterm.dispose();
+    if (wrapper) wrapper.remove();
+  } catch(e) {}
+
+  terminalTabs.delete(id);
+  previouslySubscribed.delete(id);
+  delete lastTerminalOutput[id];
+  delete userSentInput[id];
+
+  // Switch to next available tab or show empty
+  if (activeTerminalId === id) {
+    activeTerminalId = null;
+    const remaining = [...terminalTabs.keys()];
+    if (remaining.length > 0) {
+      switchTerminalTab(remaining[remaining.length - 1]);
+    } else {
+      const emptyEl = document.getElementById('termEmpty');
+      if (emptyEl) emptyEl.style.display = '';
+      updateTerminalStatusbar(null);
+    }
+  }
+
+  renderTerminalTabs();
+}
+
+/* ── Mobile paste support ──────────────────────────────── */
+function mobilePaste() {
+  if (!navigator.clipboard || !navigator.clipboard.readText) {
+    // Fallback: focus the terminal so the user can use the system paste
+    const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
+    if (tab) tab.xterm.focus();
+    return;
+  }
+  navigator.clipboard.readText().then(text => {
+    const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
+    if (!tab || !tab.isController) return;
+    if (text) {
+      tab.xterm.paste(text);
+      tab.xterm.focus();
+    }
+  }).catch(() => {
+    // Permission denied or no text — focus terminal as fallback
+    const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
+    if (tab) tab.xterm.focus();
+  });
+}
+
+// Show paste button only on touch devices
+if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('mobilePasteBtn');
+    if (btn) btn.style.display = 'inline-block';
+  });
+}
+
+function restartTerminal(id) {
+  const tab = terminalTabs.get(id);
+  if (!tab) return;
+
+  fetch('/api/terminals/' + id + '/restart', { method: 'POST' })
+    .then(r => r.json())
+    .catch(() => {});
+}
+
+function restartActiveTerminal() {
+  if (activeTerminalId !== null) restartTerminal(activeTerminalId);
+}
+
+function teardownActiveProject() {
+  if (activeTerminalId === null) return;
+  const tab = terminalTabs.get(activeTerminalId);
+  if (!tab) return;
+  if (!confirm('Remove supervisor hooks from "' + tab.project + '"?\n\nThis project will no longer route through the supervisor. Claude Code will use its normal permission flow.\n\nThe terminal will be closed.')) return;
+  fetch('/api/projects/' + encodeURIComponent(tab.project) + '/teardown', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) { alert('Teardown failed: ' + data.error); return; }
+      closeTerminalTab(activeTerminalId);
+    })
+    .catch(err => alert('Teardown failed: ' + err.message));
+}
+
+function takeControl(id) {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'terminal_take_control', terminalId: id }));
+  }
+}
+
+function renderTerminalTabs() {
+  const bar = document.getElementById('termTabBar');
+  // Keep the + New button, remove all tab elements
+  const tabs = bar.querySelectorAll('.term-tab');
+  tabs.forEach(t => t.remove());
+
+  for (const [id, tab] of terminalTabs) {
+    const el = document.createElement('button');
+    el.className = 'term-tab' + (id === activeTerminalId ? ' active' : '');
+
+    const dotEl = document.createElement('span');
+    dotEl.className = 'tdot ' + (tab.status === 'running' ? 'running' : 'exited');
+    // Use project color for the dot
+    if (tab.status === 'running') {
+      dotEl.style.background = projColor(tab.project);
+      dotEl.style.boxShadow = '0 0 4px ' + projColor(tab.project);
+      dotEl.className = 'tdot';
+    }
+
+    const label = document.createElement('span');
+    label.className = 'tlabel';
+    label.textContent = tab.project + ' #' + id;
+
+    // Context badge: prefer actual % when available, fall back to turn count
+    const pct = tab.contextPercent;
+    if (pct != null) {
+      const tc = document.createElement('span');
+      tc.textContent = pct + '%';
+      tc.style.cssText = 'font-size:10px;font-weight:700;padding:1px 5px;border-radius:6px;margin-left:4px;';
+      if (pct <= 10) { tc.style.background = 'var(--red)'; tc.style.color = '#fff'; tc.title = 'Context ' + pct + '% — compaction imminent'; }
+      else if (pct <= 25) { tc.style.background = 'var(--yellow)'; tc.style.color = '#000'; tc.title = 'Context ' + pct + '% — getting low'; }
+      else if (pct <= 50) { tc.style.background = 'var(--surface2)'; tc.style.color = 'var(--muted)'; tc.title = 'Context ' + pct + '% remaining'; }
+      else { tc.style.background = 'var(--surface2)'; tc.style.color = 'var(--muted)'; tc.title = 'Context ' + pct + '% remaining'; }
+      el.appendChild(tc);
+    } else if (tab.turnCount > 0) {
+      const tc = document.createElement('span');
+      tc.textContent = 't' + tab.turnCount;
+      tc.style.cssText = 'font-size:10px;font-weight:700;padding:1px 5px;border-radius:6px;margin-left:4px;';
+      if (tab.turnCount >= 18) { tc.style.background = 'var(--red)'; tc.style.color = '#fff'; tc.title = 'Context very large — compaction likely imminent'; }
+      else if (tab.turnCount >= 12) { tc.style.background = 'var(--yellow)'; tc.style.color = '#000'; tc.title = 'Context getting large'; }
+      else { tc.style.background = 'var(--surface2)'; tc.style.color = 'var(--muted)'; tc.title = 'Turn count'; }
+      el.appendChild(tc);
+    }
+
+    if (tab.claudeVersion && claudeVersionInfo.installed && tab.claudeVersion !== claudeVersionInfo.installed) {
+      const vb = document.createElement('span');
+      vb.className = 'ver-badge';
+      vb.textContent = 'v' + tab.claudeVersion;
+      vb.title = 'Session running v' + tab.claudeVersion + ' (installed: v' + claudeVersionInfo.installed + ')';
+      el.appendChild(vb);
+    }
+
+    if (tab.snapshotSaved) {
+      const sb = document.createElement('span');
+      sb.style.cssText = 'font-size:10px;margin-left:3px;color:var(--green);';
+      sb.textContent = '\u2713';
+      sb.title = 'Progress snapshot saved';
+      el.appendChild(sb);
+    }
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'tclose';
+    closeBtn.innerHTML = '&times;';
+    closeBtn.title = 'Close terminal';
+    closeBtn.onclick = function(e) {
+      e.stopPropagation();
+      closeTerminalTab(id);
+    };
+
+    el.appendChild(dotEl);
+    el.appendChild(label);
+    el.appendChild(closeBtn);
+
+    el.onclick = function() { switchTerminalTab(id); };
+
+    bar.appendChild(el);
+  }
+}
+
+function updateTerminalStatusbar(id) {
+  const roleEl = document.getElementById('termStatusRole');
+  const projEl = document.getElementById('termStatusProject');
+  const actionsEl = document.getElementById('termActionsBar');
+
+  if (id === null || !terminalTabs.has(id)) {
+    roleEl.textContent = '';
+    roleEl.className = '';
+    projEl.textContent = '';
+    actionsEl.style.display = 'none';
+    return;
+  }
+
+  const tab = terminalTabs.get(id);
+
+  if (tab.isController) {
+    roleEl.innerHTML = 'Controller';
+    roleEl.className = 'controller';
+  } else {
+    roleEl.innerHTML = 'Viewer (read-only) <button class="term-action-btn" onclick="takeControl(' + id + ')" style="margin-left:6px">Take Control</button>';
+    roleEl.className = 'viewer';
+  }
+
+  const statusText = tab.status === 'exited' ? ' [exited]' : '';
+  const turnText = tab.turnCount > 0 ? ' | turns: ' + tab.turnCount : '';
+  const ctxText = tab.contextPercent != null ? ' | ctx: ' + tab.contextPercent + '%' : '';
+  const compactWarn = tab.contextPercent != null && tab.contextPercent <= 10
+    ? ' ⚠ compaction imminent'
+    : tab.contextPercent != null && tab.contextPercent <= 25
+      ? ' ⚠ context low'
+      : tab.turnCount >= 18 ? ' ⚠ compaction imminent' : tab.turnCount >= 12 ? ' ⚠ context growing' : '';
+  projEl.textContent = tab.project + ' #' + id + statusText + turnText + ctxText + compactWarn;
+  actionsEl.style.display = 'flex';
+
+  // Update restart button with version hint
+  const restartBtn = document.getElementById('restartBtn');
+  if (restartBtn) {
+    const behind = tab.claudeVersion && claudeVersionInfo.installed && tab.claudeVersion !== claudeVersionInfo.installed;
+    if (behind) {
+      restartBtn.textContent = 'Restart Session (update to v' + claudeVersionInfo.installed + ')';
+      restartBtn.style.borderColor = 'var(--green)';
+      restartBtn.style.color = 'var(--green)';
+      restartBtn.title = 'Running v' + tab.claudeVersion + ' — restart to use v' + claudeVersionInfo.installed;
+    } else {
+      restartBtn.textContent = 'Restart Session';
+      restartBtn.style.borderColor = '';
+      restartBtn.style.color = '';
+      restartBtn.title = 'Restart this Claude session';
+    }
+  }
+}
+
+function sendTerminalResize(id) {
+  const tab = terminalTabs.get(id);
+  if (!tab || !ws || ws.readyState !== 1) return;
+  const cols = tab.xterm.cols;
+  const rows = tab.xterm.rows;
+  ws.send(JSON.stringify({ type: 'terminal_resize', terminalId: id, cols: cols, rows: rows }));
+}
+
+function safeFit(tab) {
+  if (!tab || !tab.xterm || !tab.fitAddon) return;
+  const viewport = tab.xterm.element?.querySelector('.xterm-viewport');
+  const scrollTop = viewport ? viewport.scrollTop : null;
+  const wasAtBottom = viewport ? (viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 10) : true;
+  tab.fitAddon.fit();
+  // Only restore scroll if user was NOT at the bottom (i.e., they scrolled up)
+  if (!wasAtBottom && viewport && scrollTop !== null) {
+    requestAnimationFrame(() => { viewport.scrollTop = scrollTop; });
+  }
+}
+
+function fitActiveTerminal() {
+  if (activeTerminalId === null) return;
+  const tab = terminalTabs.get(activeTerminalId);
+  if (!tab) return;
+  try {
+    safeFit(tab);
+    sendTerminalResize(activeTerminalId);
+  } catch(e) {}
+}
+
+/* ── Stuck session rescue ──────────────────────────────── */
+setInterval(() => {
+  if (!activeTerminalId) return;
+  const lastOutput = lastTerminalOutput[activeTerminalId] || 0;
+  const lastInput = userSentInput[activeTerminalId] || 0;
+  const now = Date.now();
+  const bar = document.getElementById('rescueBar');
+
+  // Show rescue bar if: user pressed Enter > 120s ago AND no output since then
+  if (lastInput > 0 && lastInput > lastOutput && (now - lastInput) > 120000) {
+    bar.classList.add('visible');
+    rescueTerminalId = activeTerminalId;
+  } else {
+    bar.classList.remove('visible');
+    rescueTerminalId = null;
+  }
+}, 3000);
+
+function rescueSession() {
+  if (rescueTerminalId && ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'terminal_escape', terminalId: rescueTerminalId }));
+    document.getElementById('rescueBar').classList.remove('visible');
+    // Clear tracking so it doesn't immediately re-trigger
+    userSentInput[rescueTerminalId] = 0;
+    rescueTerminalId = null;
+  }
+}
+
+/* ── New Terminal Dialog ─────────────────────────────────── */
+function showNewTerminalDialog() {
+  const overlay = document.getElementById('newTermDialog');
+  const body = document.getElementById('projectList');
+  body.innerHTML = '<div class="dialog-loading">Loading projects...</div>';
+  overlay.classList.add('open');
+
+  fetch('/api/projects')
+    .then(r => r.json())
+    .then(data => {
+      if (!data.projects || data.projects.length === 0) {
+        body.innerHTML = '<div class="dialog-loading">No projects found in ' + esc(data.projectRoot || '') + '</div>';
+        return;
+      }
+      body.innerHTML = '';
+      for (const p of data.projects) {
+        const row = document.createElement('button');
+        row.className = 'project-row';
+        row.innerHTML = '<span class="pdot" style="background:' + projColor(p) + '"></span>'
+          + '<span class="pname">' + esc(p) + '</span>'
+          + '<span class="parrow">&rsaquo;</span>';
+        row.onclick = function() { createTerminal(p); };
+        body.appendChild(row);
+      }
+      // "New Project" form at the bottom
+      const newRow = document.createElement('div');
+      newRow.className = 'new-project-row';
+      newRow.innerHTML = '<input type="text" id="newProjectName" placeholder="project-name" />'
+        + '<button onclick="submitNewProject()">Create</button>';
+      body.appendChild(newRow);
+      document.getElementById('newProjectName').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') submitNewProject();
+      });
+    })
+    .catch(err => {
+      body.innerHTML = '<div class="dialog-loading">Error: ' + esc(err.message) + '</div>';
+    });
+}
+
+function submitNewProject() {
+  const input = document.getElementById('newProjectName');
+  if (!input) return;
+  const name = input.value.trim();
+  if (!name) { input.focus(); return; }
+  input.disabled = true;
+  fetch('/api/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) { alert('Error: ' + data.error); input.disabled = false; input.focus(); return; }
+      createTerminal(data.project);
+    })
+    .catch(err => {
+      alert('Failed to create project: ' + err.message);
+      input.disabled = false;
+      input.focus();
+    });
+}
+
+function closeNewTerminalDialog() {
+  document.getElementById('newTermDialog').classList.remove('open');
+}
+
+function createTerminal(project) {
+  closeNewTerminalDialog();
+  fetch('/api/terminals', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project: project }),
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        alert('Error: ' + data.error);
+        return;
+      }
+      openTerminalTab(data.id, data.project, data.status || 'running');
+    })
+    .catch(err => {
+      alert('Failed to create terminal: ' + err.message);
+    });
+}
+
+/* Close dialog on backdrop click */
+document.getElementById('newTermDialog').addEventListener('click', function(e) {
+  if (e.target === this) closeNewTerminalDialog();
+});
+
+/* ── Resize handling ─────────────────────────────────────── */
+let resizeTimeout;
+window.addEventListener('resize', function() {
+  clearTimeout(resizeTimeout);
+  resizeTimeout = setTimeout(function() {
+    fitActiveTerminal();
+  }, 150);
+});
+
+/* ── Approval card functions (existing) ──────────────────── */
+function updateCardAI(id, ai) {
+  const el = document.getElementById('c-'+id);
+  if (!el) return;
+  el.classList.remove('ai-evaluating');
+  const b = el.querySelector('.ai-badge');
+  if (b) {
+    const cls = ai.approved ? 'approved' : 'denied';
+    b.className = 'ai-badge '+cls;
+    b.textContent = 'AI: '+(ai.approved?'approve':'deny')+' ('+(ai.confidence*100).toFixed(0)+'%)';
+  }
+  if (ai.reason) {
+    const s = el.querySelector('.summary');
+    if (s && !el.querySelector('.ai-reason')) {
+      s.insertAdjacentHTML('afterend', '<div class="ai-reason">'+esc(ai.reason)+'</div>');
+    }
+  }
+}
+
+function updateCardAIError(id) {
+  const el = document.getElementById('c-'+id);
+  if (!el) return;
+  el.classList.remove('ai-evaluating');
+  const b = el.querySelector('.ai-badge');
+  if (b) { b.className = 'ai-badge error'; b.textContent = 'AI error'; }
+}
+
+function markCardAiResolved(id, status) {
+  const el = document.getElementById('c-'+id);
+  if (!el) return;
+  el.classList.add('ai-resolved');
+  el.classList.remove('ai-evaluating');
+  el.style.borderColor = status === 'approved' ? 'var(--green)' : 'var(--red)';
+  const b = el.querySelector('.ai-badge');
+  if (b) { b.className = 'ai-badge '+(status==='approved'?'approved':'denied'); b.textContent = 'AI '+status; }
+  const a = el.querySelector('.actions');
+  if (a) {
+    a.innerHTML =
+      '<div style="text-align:center;padding:4px;font-size:12px;color:'
+      +(status==='approved'?'var(--green)':'var(--red)')+';font-weight:600">AI '
+      +(status==='approved'?'approved':'denied')+'</div>'
+      +'<div style="display:flex;gap:8px;margin-top:6px">'
+      +'<button class="btn-override" onclick="respond('+id+',true)">Override: Approve</button>'
+      +'<button class="btn-override" onclick="respond('+id+',false)">Override: Deny</button></div>';
+  }
+  const autoTimer = setTimeout(() => { const c = document.getElementById('c-'+id); if (c && c.classList.contains('ai-resolved')) removeCard(id); }, 30000);
+  el._autoRemoveTimer = autoTimer;
+}
+
+function addProjectFilter(name) {
+  if (!name || name === 'unknown' || knownProjects.has(name)) return;
+  knownProjects.add(name);
+  const btn = document.createElement('button');
+  btn.className = 'filter-btn'; btn.dataset.project = name;
+  btn.onclick = () => setFilter(name);
+  btn.innerHTML = '<span class="proj-dot" style="background:'+projColor(name)+'"></span>'+esc(name);
+  filterBar.appendChild(btn);
+}
+
+function setFilter(project) {
+  activeFilter = project;
+  filterBar.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.dataset.project === project));
+  applyFilter();
+}
+
+function applyFilter() {
+  cards.querySelectorAll('.card').forEach(c => {
+    const p = c.dataset.project || '';
+    c.classList.toggle('hidden', activeFilter !== 'all' && p !== activeFilter);
+  });
+  logEl.querySelectorAll('.log-row').forEach(r => {
+    const p = r.dataset.project || '';
+    r.classList.toggle('hidden', activeFilter !== 'all' && p && p !== activeFilter);
+  });
+  updateBadge();
+}
+
+function updateBadge() {
+  const v = cards.querySelectorAll('.card:not(.hidden):not(.ai-resolved)').length;
+  badge.textContent = v;
+  badge.className = v > 0 ? 'badge show' : 'badge';
+  document.title = v > 0 ? '(' + v + ') Claude Supervisor' : 'Claude Supervisor';
+  updateApprovalTabBadge();
+}
+
+function renderCards(list) {
+  if (!list.length) { cards.innerHTML = '<div class="empty">No pending approvals</div>'; updateBadge(); return; }
+  cards.innerHTML = list.map(cardHTML).join('');
+  applyFilter();
+}
+
+function addCard(a) {
+  const empty = cards.querySelector('.empty');
+  if (empty) empty.remove();
+  cards.insertAdjacentHTML('afterbegin', cardHTML(a));
+  applyFilter();
+  updateApprovalsBadge();
+}
+
+function removeCard(id) {
+  const el = document.getElementById('c-'+id);
+  if (el) {
+    if (el._autoRemoveTimer) clearTimeout(el._autoRemoveTimer);
+    el.style.opacity='0.4'; setTimeout(() => { el.remove(); applyFilter(); if(!cards.querySelector('.card')) cards.innerHTML='<div class="empty">No pending approvals</div>'; updateApprovalsBadge(); }, 600);
+  }
+  else { updateBadge(); updateApprovalsBadge(); }
+}
+
+function cardHTML(a) {
+  const t = new Date(a.createdAt).toLocaleTimeString();
+  const c = projColor(a.project);
+  const projBadge = a.project && a.project !== 'unknown'
+    ? '<span class="proj-badge" style="background:'+c+'22;color:'+c+';border:1px solid '+c+'44">'+esc(a.project)+'</span>' : '';
+
+  let aiBadge = '';
+  if (a.aiStatus === 'evaluating') aiBadge = '<span class="ai-badge evaluating">AI evaluating...</span>';
+  else if (a.aiDecision) {
+    const cls = a.aiDecision.approved ? 'approved' : 'denied';
+    aiBadge = '<span class="ai-badge '+cls+'">AI: '+(a.aiDecision.approved?'approve':'deny')+' ('+(a.aiDecision.confidence*100).toFixed(0)+'%)</span>';
+  } else if (a.aiStatus === 'error' || a.aiStatus === 'timeout') aiBadge = '<span class="ai-badge error">AI '+esc(a.aiStatus)+'</span>';
+
+  let aiReason = '';
+  if (a.aiDecision && a.aiDecision.reason) aiReason = '<div class="ai-reason">'+esc(a.aiDecision.reason)+'</div>';
+
+  let cls = 'card';
+  if (a.aiStatus === 'evaluating') cls += ' ai-evaluating';
+  if (a.decidedBy === 'ai') cls += ' ai-resolved';
+
+  let actions;
+  if (a.decidedBy === 'ai') {
+    const s = a.status;
+    actions = '<div style="text-align:center;padding:4px;font-size:12px;color:'+(s==='approved'?'var(--green)':'var(--red)')+';font-weight:600">AI '+s+'</div>'
+      +'<div class="actions"><button class="btn-override" onclick="respond('+a.id+',true)">Override: Approve</button>'
+      +'<button class="btn-override" onclick="respond('+a.id+',false)">Override: Deny</button></div>';
+  } else {
+    actions = '<div class="actions"><button class="btn btn-yes" onclick="respond('+a.id+',true)">Approve</button>'
+      +'<button class="btn btn-no" onclick="respond('+a.id+',false)">Deny</button></div>';
+  }
+
+  return '<div class="'+cls+'" id="c-'+a.id+'" data-project="'+esc(a.project||'')+'">'
+    +'<span class="tool">'+esc(a.tool)+'</span>'+projBadge+aiBadge
+    +'<span class="id">#'+a.id+'</span>'
+    +'<div class="summary">'+esc(a.summary)+'</div>'
+    +aiReason
+    +'<div class="time">'+t+'</div>'
+    +actions+'</div>';
+}
+
+function respond(id, approved) {
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type:'respond', id, approved }));
+  const el = document.getElementById('c-'+id);
+  if (el) {
+    el.style.borderColor = approved ? 'var(--green)' : 'var(--red)';
+    el.querySelector('.actions').innerHTML = '<div style="text-align:center;padding:8px;color:'+(approved?'var(--green)':'var(--red)')+';font-weight:600">'+(approved?'Approved':'Denied')+'</div>';
+    setTimeout(() => removeCard(id), 1500);
+  }
+}
+
+/* ── Question handling ─────────────────────────────── */
+const questionQueue = new Map();
+let activeQuestionId = null;
+
+function playQuestionBell() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Two-tone bell: C5 then E5
+    [523.25, 659.25].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.15);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.15 + 0.3);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.15);
+      osc.stop(ctx.currentTime + i * 0.15 + 0.3);
+    });
+  } catch {}
+}
+
+function showQuestion(question) {
+  questionQueue.set(question.id, question);
+  if (activeQuestionId === null) {
+    renderQuestion(question);
+    playQuestionBell();
+  }
+}
+
+function renderQuestion(question) {
+  activeQuestionId = question.id;
+  const body = document.getElementById('questionBody');
+  const projBadge = document.getElementById('questionProjBadge');
+  const overlay = document.getElementById('questionOverlay');
+  const aiBtn = document.getElementById('questionAiBtn');
+
+  const c = projColor(question.project);
+  projBadge.style.cssText = 'background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44';
+  projBadge.textContent = question.project;
+  aiBtn.disabled = false;
+  aiBtn.textContent = 'Let AI Decide';
+
+  const qIdx = question.currentQuestionIndex || 0;
+  const q = question.questions[qIdx];
+  let html = '';
+
+  if (q.header) html += '<div class="question-subtext">' + esc(q.header) + '</div>';
+  html += '<div class="question-text">' + esc(q.question) + '</div>';
+
+  (q.options || []).forEach((opt, i) => {
+    html += '<button class="question-option" onclick="selectQuestionOption(' + question.id + ',' + i + ')">'
+      + '<div class="opt-label">' + esc(opt.label) + '</div>'
+      + (opt.description ? '<div class="opt-desc">' + esc(opt.description) + '</div>' : '')
+      + '</button>';
+  });
+
+  html += '<button class="question-option" onclick="showFreeformInput(' + question.id + ')">'
+    + '<div class="opt-label">Other...</div>'
+    + '<div class="opt-desc">Type a custom answer</div></button>';
+  html += '<div id="freeformWrap" style="display:none;margin-top:8px">'
+    + '<input type="text" id="freeformInput" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;font-family:inherit;box-sizing:border-box" placeholder="Type your answer..." onkeydown="if(event.key===\'Enter\')submitFreeformAnswer(' + question.id + ')">'
+    + '<button class="btn btn-yes" style="margin-top:8px;padding:10px;width:100%" onclick="submitFreeformAnswer(' + question.id + ')">Submit</button></div>';
+
+  if (question.questions.length > 1) {
+    html += '<div class="question-progress">Question ' + (qIdx + 1) + ' of ' + question.questions.length + '</div>';
+  }
+
+  body.innerHTML = html;
+  overlay.classList.add('open');
+  if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+}
+
+function selectQuestionOption(questionId, optionIndex) {
+  const question = questionQueue.get(questionId);
+  if (!question) return;
+  if (!question._collectedAnswers) question._collectedAnswers = [];
+  question._collectedAnswers.push({ questionIndex: question.currentQuestionIndex || 0, optionIndex });
+  const nextIdx = (question.currentQuestionIndex || 0) + 1;
+  if (nextIdx < question.questions.length) {
+    question.currentQuestionIndex = nextIdx;
+    renderQuestion(question);
+  } else {
+    submitQuestionAnswer(questionId, question._collectedAnswers, 'human');
+  }
+}
+
+function showFreeformInput(questionId) {
+  document.getElementById('freeformWrap').style.display = 'block';
+  document.getElementById('freeformInput').focus();
+}
+
+function submitFreeformAnswer(questionId) {
+  const input = document.getElementById('freeformInput');
+  const text = input.value.trim();
+  if (!text) return;
+  const question = questionQueue.get(questionId);
+  if (!question) return;
+  if (!question._collectedAnswers) question._collectedAnswers = [];
+  question._collectedAnswers.push({ questionIndex: question.currentQuestionIndex || 0, freeformText: text });
+  const nextIdx = (question.currentQuestionIndex || 0) + 1;
+  if (nextIdx < question.questions.length) {
+    question.currentQuestionIndex = nextIdx;
+    renderQuestion(question);
+  } else {
+    submitQuestionAnswer(questionId, question._collectedAnswers, 'human');
+  }
+}
+
+function submitQuestionAnswer(questionId, answers, answeredBy) {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'question_answer', questionId, answers, answeredBy }));
+  }
+  closeQuestionOverlay(questionId);
+}
+
+function letAIDecideQuestion() {
+  if (activeQuestionId === null) return;
+  const btn = document.getElementById('questionAiBtn');
+  btn.disabled = true;
+  btn.textContent = 'AI thinking...';
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'question_ai_decide', questionId: activeQuestionId }));
+  }
+}
+
+function dismissQuestion() {
+  if (activeQuestionId !== null) closeQuestionOverlay(activeQuestionId);
+}
+
+function closeQuestionOverlay(questionId) {
+  questionQueue.delete(questionId);
+  activeQuestionId = null;
+  document.getElementById('questionOverlay').classList.remove('open');
+  const next = questionQueue.values().next().value;
+  if (next) renderQuestion(next);
+}
+
+function addLog(e) {
+  const t = new Date(e.timestamp).toLocaleTimeString();
+  const d = document.createElement('div');
+  d.className = 'log-row '+(e.level||'info');
+  if (e.project) d.dataset.project = e.project;
+  const pt = e.project && e.project !== 'unknown'
+    ? '<span style="color:'+projColor(e.project)+';margin-right:4px;font-weight:600">['+esc(e.project)+']</span>' : '';
+  d.innerHTML = '<span class="t">'+t+'</span>'+pt+'<span class="m">'+esc(e.message)+'</span>';
+  logEl.insertBefore(d, logEl.firstChild);
+  while (logEl.children.length > 150) logEl.removeChild(logEl.lastChild);
+  if (activeFilter !== 'all' && e.project && e.project !== activeFilter) d.classList.add('hidden');
+}
+
+function esc(s) { const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+
+// ── Eval Stats ─────────────────────────────────────
+let _uptimeInterval = null;
+let _serverStartedAt = null;
+
+function updateEvalStats(stats, serverStartedAt) {
+  _serverStartedAt = serverStartedAt;
+  const el = document.getElementById('supervisorStats');
+  if (!el) return;
+  const label = window._evalBackendLabel || 'unknown';
+  const ver = window._svVersion || '?';
+  const thresh = window._confidenceThreshold ? (window._confidenceThreshold * 100) + '%' : '?';
+
+  const evals = stats.aiEvals || 0;
+  const approved = stats.aiApproved || 0;
+  const denied = stats.aiDenied || 0;
+  const human = stats.humanDecisions || 0;
+
+  function formatUptime(startMs) {
+    const secs = Math.floor((Date.now() - startMs) / 1000);
+    if (secs < 60) return secs + 's';
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return mins + 'm';
+    const hrs = Math.floor(mins / 60);
+    const remMins = mins % 60;
+    return hrs + 'h' + (remMins ? remMins + 'm' : '');
+  }
+
+  let parts = [ver, label, 'threshold ' + thresh];
+
+  let evalPart = evals + ' eval' + (evals !== 1 ? 's' : '');
+  if (evals > 0) {
+    evalPart += ' (' + approved + '\u2713 ' + denied + '\u2717)';
+  }
+  if (human > 0) {
+    evalPart += ' ' + human + ' human';
+  }
+  parts.push(evalPart);
+
+  // Usage stats from statusLine
+  const usage = window._lastUsage;
+  if (usage && (usage.totalInputTokens > 0 || usage.totalOutputTokens > 0)) {
+    function fmtTokens(n) {
+      if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+      if (n >= 1000) return Math.round(n / 1000) + 'K';
+      return String(n);
+    }
+    let usagePart = fmtTokens(usage.totalInputTokens + usage.totalOutputTokens) + ' tokens';
+    if (usage.sessions > 1) usagePart += ' (' + usage.sessions + ' sessions)';
+    parts.push(usagePart);
+  }
+
+  if (serverStartedAt) {
+    parts.push(formatUptime(serverStartedAt) + ' uptime');
+  }
+
+  // Build base status as escaped text, then append colored rate limits as HTML
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  let html = esc(parts.join(' \u2502 '));
+
+  // Rate limits from API headers (globalRateLimits) or /usage terminal output (_lastRateLimits)
+  const grl = window._globalRateLimits;
+  const rlColor = pct => pct >= 80 ? 'var(--red)' : pct >= 50 ? 'var(--yellow)' : 'var(--green)';
+  if (grl && (grl.fiveHourUtilization !== null || grl.sevenDayUtilization !== null)) {
+    const rlSpans = [];
+    if (grl.fiveHourUtilization !== null) {
+      const pct = Math.round(grl.fiveHourUtilization * 100);
+      rlSpans.push(`<span style="color:${rlColor(pct)};font-weight:600">5h ${pct}%</span>`);
+    }
+    if (grl.sevenDayUtilization !== null) {
+      const pct = Math.round(grl.sevenDayUtilization * 100);
+      rlSpans.push(`<span style="color:${rlColor(pct)};font-weight:600">7d ${pct}%</span>`);
+    }
+    if (rlSpans.length) html += ' \u2502 ' + rlSpans.join(' \u2502 ');
+  } else {
+    const rl = window._lastRateLimits;
+    if (rl) {
+      const sp = parseInt(rl.session.pct);
+      let rlHtml = `<span style="color:${rlColor(sp)};font-weight:600">session ${rl.session.pct}%</span>`;
+      if (rl.weekAll) {
+        const wp = parseInt(rl.weekAll.pct);
+        rlHtml += ` \u2502 <span style="color:${rlColor(wp)};font-weight:600">week ${rl.weekAll.pct}%</span>`;
+      }
+      html += ' \u2502 ' + rlHtml;
+    }
+  }
+
+  el.innerHTML = html;
+
+  if (!_uptimeInterval && serverStartedAt) {
+    _uptimeInterval = setInterval(() => {
+      if (_serverStartedAt && window._lastEvalStats) {
+        updateEvalStats(window._lastEvalStats, _serverStartedAt);
+      }
+    }, 60000);
+  }
+  window._lastEvalStats = stats;
+}
+
+function updateUsageDisplay(agg) {
+  if (!agg) return;
+  window._lastUsage = agg;
+  // Refresh the full stats display
+  if (window._lastEvalStats) {
+    updateEvalStats(window._lastEvalStats, _serverStartedAt);
+  }
+}
+
+// ── Claude API Status ──────────────────────────────
+function updateClaudeStatus(status) {
+  const el = document.getElementById('claudeStatus');
+  if (!el) return;
+  const hasIncidents = status.incidents && status.incidents.length > 0;
+  const ok = !hasIncidents;
+  const color = ok ? 'var(--green)' : 'var(--red)';
+  const label = ok ? 'API OK' : (status.incidents?.[0]?.name || status.description || 'Issues');
+  const shortLabel = ok ? 'API OK' : 'API Issues (' + (status.incidents?.length || 0) + ')';
+  el.innerHTML = '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:'+color+';margin-right:5px;vertical-align:middle'+(ok?'':';animation:pulse 1.5s infinite')+'"></span>'
+    + '<span style="color:'+color+';font-weight:600">'+esc(shortLabel)+'</span>';
+  el.title = label;
+
+  // Update detail panel
+  const detail = document.getElementById('statusDetail');
+  if (!detail) return;
+  if (ok && !hasIncidents) {
+    detail.innerHTML = '<span style="color:var(--green)">All systems operational</span>';
+  } else {
+    let html = '';
+    for (const inc of (status.incidents || [])) {
+      const impactColor = inc.impact === 'major' ? 'var(--red)' : inc.impact === 'minor' ? 'var(--yellow)' : 'var(--muted)';
+      const ts = inc.updatedAt ? new Date(inc.updatedAt).toLocaleString() : '';
+      html += '<div style="margin-bottom:6px"><span style="color:'+impactColor+';font-weight:600">['+esc(inc.status)+']</span> '
+        + esc(inc.name) + (ts ? ' <span style="color:var(--muted);font-weight:400;font-size:11px">(' + esc(ts) + ')</span>' : '');
+      if (inc.latestUpdate) html += '<div style="color:var(--muted);margin-top:2px;font-style:italic">' + esc(inc.latestUpdate.slice(0, 200)) + '</div>';
+      html += '</div>';
+    }
+    if (status.lastChecked) {
+      html += '<div style="margin-top:4px;font-size:10px;color:var(--muted)">Checked: ' + new Date(status.lastChecked).toLocaleTimeString() + '</div>';
+    }
+    detail.innerHTML = html || '<span style="color:var(--yellow)">' + esc(status.description) + '</span>';
+  }
+}
+
+function toggleStatusDetail() {
+  const el = document.getElementById('statusDetail');
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function checkPendingChanges() {
+  fetch('/api/version/pending').then(function(r) { return r.json(); }).then(function(data) {
+    var badge = document.getElementById('pendingBadge');
+    if (!badge) return;
+    if (data.behindBy > 0) {
+      badge.textContent = data.behindBy;
+      badge.title = data.behindBy + ' commit(s) pending restart';
+      badge.style.display = 'inline';
+    } else {
+      badge.style.display = 'none';
+    }
+  }).catch(function() {});
+}
+setInterval(checkPendingChanges, 60000);
+
+function togglePendingChanges() {
+  var popup = document.getElementById('pendingChangesPopup');
+  if (popup.style.display !== 'none') { popup.style.display = 'none'; return; }
+  popup.textContent = 'Loading...';
+  popup.style.display = 'block';
+  fetch('/api/version/pending').then(function(r) { return r.json(); }).then(function(data) {
+    if (data.behindBy === 0) {
+      popup.textContent = 'Up to date (running ' + (data.startupCommit || '?') + ')';
+    } else {
+      var lines = data.behindBy + ' commit' + (data.behindBy > 1 ? 's' : '') + ' behind (running ' + data.startupCommit + ', latest ' + data.currentHead + ')\n\n';
+      data.changes.forEach(function(c) { lines += c.hash + ' ' + c.message + '\n'; });
+      popup.textContent = lines;
+    }
+  }).catch(function() { popup.textContent = 'Failed to check'; });
+}
+
+// Close pending changes popup on outside click
+document.addEventListener('click', function(e) {
+  var popup = document.getElementById('pendingChangesPopup');
+  var stats = document.getElementById('supervisorStats');
+  var badge = document.getElementById('pendingBadge');
+  if (popup && popup.style.display !== 'none' && !popup.contains(e.target) && !stats.contains(e.target) && e.target !== badge) {
+    popup.style.display = 'none';
+  }
+});
+
+/* ── Agent activity ─────────────────────────────────────── */
+const agentTaskMap = new Map(); // taskId -> { project, status, progress, messages[], discoveries[], lastUpdate }
+
+function formatDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m < 60) return m + 'm ' + rem + 's';
+  const h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60) + 'm';
+}
+
+function handleAgentMessage(msg) {
+  // Agent chat messages from supervisor/{project}/chat/{room}/... have type='chat'
+  if (msg.type === 'chat' || msg.msgType === 'chat') {
+    addTcAgentMsg(msg);
+    return;
+  }
+
+  const { taskId, project, msgType, payload, timestamp } = msg;
+  const mapKey = (project || 'unknown') + ':' + (taskId || 'agent');
+
+  if (!agentTaskMap.has(mapKey)) {
+    agentTaskMap.set(mapKey, {
+      taskId,
+      project,
+      status: 'running',
+      progress: 0,
+      description: '',
+      messages: [],
+      discoveries: [],
+      lastUpdate: timestamp,
+      startedAt: timestamp || new Date().toISOString()
+    });
+  }
+
+  const task = agentTaskMap.get(mapKey);
+  task.lastUpdate = timestamp;
+  task.project = project;
+
+  switch (msgType) {
+    case 'status':
+      task.status = payload.status || 'running';
+      if (payload.description) task.description = payload.description;
+      break;
+    case 'progress':
+      if (payload.percent !== undefined) task.progress = payload.percent;
+      if (payload.message) task.messages.push({ text: payload.message, time: timestamp });
+      if (task.messages.length > 10) task.messages = task.messages.slice(-10);
+      break;
+    case 'discovery':
+      task.discoveries.push({ text: payload.finding || payload.message, time: timestamp });
+      break;
+    case 'coordination':
+      task.messages.push({ text: '[coord] ' + payload.message, time: timestamp });
+      if (task.messages.length > 10) task.messages = task.messages.slice(-10);
+      break;
+  }
+
+  if (payload.status === 'completed' || payload.status === 'failed' || payload.status === 'end_turn') {
+    task.completedAt = timestamp || new Date().toISOString();
+  }
+
+  renderAgentTasks();
+}
+
+function updateOperationsBadge() {
+  const agentActive = [...agentTaskMap.values()].filter(t => t.status === 'running').length;
+  const coordActive = [...coordinatorRequestMap.values()].filter(e => ['pending','dispatched','running'].includes(e.status)).length;
+  const total = agentActive + coordActive;
+  const el = document.getElementById('operationsBadge');
+  if (el) el.textContent = total || (agentTaskMap.size + coordinatorRequestMap.size) || 0;
+}
+
+function switchOpsTab(tab) {
+  document.querySelectorAll('.ops-tab').forEach(b => b.classList.toggle('active', b.id === 'opsTab' + tab.charAt(0).toUpperCase() + tab.slice(1)));
+  document.querySelectorAll('.ops-pane').forEach(p => p.classList.toggle('active', p.id === 'opsPane' + tab.charAt(0).toUpperCase() + tab.slice(1)));
+}
+
+function renderAgentTasks() {
+  const container = document.getElementById('agentTasks');
+  if (!container) return;
+
+  const sorted = [...agentTaskMap.entries()].sort((a, b) => {
+    if (a[1].status === 'running' && b[1].status !== 'running') return -1;
+    if (b[1].status === 'running' && a[1].status !== 'running') return 1;
+    return new Date(b[1].lastUpdate) - new Date(a[1].lastUpdate);
+  });
+
+  const activeCount = sorted.filter(([_, t]) => t.status === 'running').length;
+  updateOperationsBadge();
+
+  const visible = sorted.slice(0, 20);
+
+  container.innerHTML = visible.map(([mapKey, task]) => {
+    const shortId = (task.taskId || mapKey).length > 12 ? (task.taskId || mapKey).slice(0, 12) : (task.taskId || mapKey);
+    const lastMsg = task.messages.length ? task.messages[task.messages.length - 1].text : '';
+    const statusClass = task.status === 'completed' ? 'completed' : task.status === 'failed' ? 'failed' : 'running';
+
+    let html = '<div class="agent-task ' + (task.status === 'completed' ? 'completed' : '') + '">'
+      + '<div class="task-header">'
+      + '<span class="task-project">' + esc(task.project) + '</span>'
+      + '<span class="task-id">' + esc(shortId) + '</span>'
+      + '<span class="task-status ' + statusClass + '">' + esc(task.status) + '</span>'
+      + '</div>';
+
+    if (task.description) {
+      html += '<div class="message" style="color: var(--text)">' + esc(task.description) + '</div>';
+    }
+
+    const now = Date.now();
+    const isStopped = task.completedAt || task.status === 'completed' || task.status === 'failed' || task.status === 'end_turn';
+    if (isStopped) {
+      const end = task.completedAt ? new Date(task.completedAt).getTime() : now;
+      const elapsed = end - new Date(task.startedAt).getTime();
+      html += '<div class="task-timing">'
+        + '<span class="duration">Ran for ' + formatDuration(elapsed) + '</span>'
+        + '</div>';
+    } else {
+      const elapsed = now - new Date(task.startedAt).getTime();
+      const lastAgo = now - new Date(task.lastUpdate).getTime();
+      html += '<div class="task-timing">'
+        + '<span class="duration">Running for ' + formatDuration(elapsed) + '</span>'
+        + '<span class="last-active">Active ' + formatDuration(lastAgo) + ' ago</span>'
+        + '</div>';
+    }
+
+    if (lastMsg) {
+      html += '<div class="message">' + esc(lastMsg) + '</div>';
+    }
+
+    task.discoveries.slice(-3).forEach(d => {
+      html += '<div class="discovery">' + esc(d.text) + '</div>';
+    });
+
+    html += '</div>';
+    return html;
+  }).join('');
+}
+
+setInterval(() => {
+  let changed = false;
+  const cutoff = Date.now() - 300000;
+  for (const [id, task] of agentTaskMap) {
+    if (task.completedAt && new Date(task.completedAt).getTime() < cutoff) {
+      agentTaskMap.delete(id);
+      changed = true;
+    }
+  }
+  if (changed) renderAgentTasks();
+}, 30000);
+
+// Refresh agent task timers every 5 seconds so running durations tick up
+setInterval(() => {
+  if (agentTaskMap.size > 0) renderAgentTasks();
+}, 5000);
+
+/* ── Coordinator ───────────────────────────────────────────── */
+let coordinatorInstance = "";
+const coordinatorRequestMap = new Map();
+
+function handleCoordinatorRequest(msg) {
+  const existing = coordinatorRequestMap.get(msg.id);
+  if (existing) {
+    Object.assign(existing, msg);
+  } else {
+    coordinatorRequestMap.set(msg.id, { ...msg });
+  }
+  renderCoordinator();
+}
+
+function handleCoordinatorResponse(msg) {
+  const entry = coordinatorRequestMap.get(msg.id);
+  if (entry) {
+    entry.status = msg.status || (msg.response && msg.response.status) || "completed";
+    if (msg.response) {
+      entry.response = msg.response;
+    }
+    renderCoordinator();
+
+    if (["completed", "failed", "timeout", "cancelled"].includes(entry.status)) {
+      entry.completedAt = Date.now();
+    }
+  }
+}
+
+function handleCoordinatorDispatched(msg) {
+  const entry = coordinatorRequestMap.get(msg.id);
+  if (entry) {
+    entry.status = msg.status || "dispatched";
+    entry.dispatchedTo = msg.dispatchedTo;
+    renderCoordinator();
+  }
+}
+
+function renderCoordinator() {
+  const container = document.getElementById("coordinatorRequests");
+  const emptyEl = document.getElementById("coordinatorEmpty");
+  const instanceEl = document.getElementById("coordinatorInstance");
+
+  if (coordinatorInstance && instanceEl) {
+    instanceEl.textContent = coordinatorInstance;
+  }
+
+  const entries = Array.from(coordinatorRequestMap.entries());
+  updateOperationsBadge();
+
+  if (entries.length === 0) {
+    emptyEl.style.display = "";
+    return;
+  }
+  emptyEl.style.display = "none";
+
+  // Sort: active first (explicit requests before auto-tasks), then by time descending
+  entries.sort((a, b) => {
+    const aActive = ["pending", "dispatched", "running"].includes(a[1].status) ? 0 : 1;
+    const bActive = ["pending", "dispatched", "running"].includes(b[1].status) ? 0 : 1;
+    if (aActive !== bActive) return aActive - bActive;
+    // Within active: explicit requests before auto-created tasks
+    const aAuto = a[1].autoCreated ? 1 : 0;
+    const bAuto = b[1].autoCreated ? 1 : 0;
+    if (aAuto !== bAuto) return aAuto - bAuto;
+    return (b[1].createdAt || "") > (a[1].createdAt || "") ? 1 : -1;
+  });
+
+  let html = '<div class="coord-empty" id="coordinatorEmpty" style="display:none">No active requests</div>';
+
+  for (const [id, entry] of entries) {
+    const req = entry.request || {};
+    const isAutoTask = !!(entry.autoCreated && (entry.type === "task" || req.type === "task"));
+    const shortId = id.substring(0, 8);
+    const desc = req.description || entry.description || "No description";
+    const status = entry.status || (isAutoTask ? 'running' : 'pending');
+    const resultText = entry.response && entry.response.result ? entry.response.result : "";
+    const hasResult = resultText.length > 0;
+    const hasProgress = typeof entry.progress === 'number';
+
+    html += '<div class="coord-request' + (isAutoTask ? ' auto-task' : '') + '" id="coord-' + id + '">';
+    html += '<div class="coord-request-header">';
+    html += '<span class="coord-status ' + status + '">' + status + '</span>';
+    html += '<span class="coord-type-badge ' + (isAutoTask ? 'task' : 'request') + '">' + (isAutoTask ? 'subagent' : (req.type || 'request')) + '</span>';
+    html += '<div class="coord-actions">';
+
+    // Dispatch only for explicit pending requests (not auto-created)
+    if (!isAutoTask && status === "pending") {
+      html += '<button class="coord-btn" onclick="dispatchCoordinatorRequest(\'' + id + '\')" style="background:#1a3a1a;color:#81c784">Dispatch</button>';
+    }
+    if (!isAutoTask && ["pending", "dispatched"].includes(status)) {
+      html += '<button class="coord-btn cancel" onclick="cancelCoordinatorRequest(\'' + id + '\')">Cancel</button>';
+    }
+
+    if (hasResult) {
+      html += '<button class="coord-btn" onclick="toggleCoordResult(\'' + id + '\')">Result</button>';
+    }
+
+    html += '</div></div>';
+    html += '<div class="coord-request-desc">' + esc(desc) + '</div>';
+
+    // Elapsed time display
+    const createdAt = entry.createdAt || entry.receivedAt;
+    if (createdAt) {
+      const elapsed = status === 'running' || status === 'dispatched'
+        ? Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000)
+        : entry.completedAt ? Math.floor((new Date(entry.completedAt).getTime() - new Date(createdAt).getTime()) / 1000) : null;
+      if (elapsed !== null) {
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        const timeStr = mins > 0 ? mins + 'm ' + secs + 's' : secs + 's';
+        const isActive = status === 'running' || status === 'dispatched';
+        const timeoutSecs = req.timeout || entry.timeout || 300;
+        const timeLabel = isActive ? timeStr + ' / ' + Math.floor(timeoutSecs / 60) + 'm budget' : timeStr + ' total';
+        html += '<div class="coord-progress" style="opacity:' + (isActive ? '1' : '0.6') + '">\u23f1 ' + timeLabel + '</div>';
+        if (isActive) {
+          const timePct = Math.min(100, (elapsed / timeoutSecs) * 100);
+          html += '<div class="coord-progress-bar-wrap"><div class="coord-progress-bar" style="width:' + timePct + '%;background:' + (timePct > 80 ? '#e57373' : '#4fc3f7') + '"></div></div>';
+        }
+      }
+    }
+
+    if (hasProgress && status === 'running') {
+      const pct = Math.min(100, Math.max(0, entry.progress));
+      const progressLabel = entry.progressText ? pct + '% \u2014 ' + esc(entry.progressText) : pct + '%';
+      html += '<div class="coord-progress">' + progressLabel + '</div>';
+      html += '<div class="coord-progress-bar-wrap"><div class="coord-progress-bar" style="width:' + pct + '%"></div></div>';
+    }
+
+    html += '<div class="coord-request-meta">';
+    html += '<span>' + esc(shortId) + '</span>';
+    if (!isAutoTask) {
+      const from = req.from ? (req.from.project || "?") + "/" + (req.from.agent || "?") : "unknown";
+      const target = req.target_project || "any";
+      html += '<span>from: ' + esc(from) + '</span>';
+      html += '<span>target: ' + esc(target) + '</span>';
+    }
+    if (entry.taskId) {
+      html += '<span>task: ' + esc(entry.taskId) + '</span>';
+    }
+    if (entry.dispatchedTo) {
+      html += '<span>dispatched: ' + esc(entry.dispatchedTo) + '</span>';
+    }
+    html += '</div>';
+
+    if (hasResult) {
+      html += '<div class="coord-result" id="coord-result-' + id + '">' + esc(resultText) + '</div>';
+    }
+
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+function toggleCoordResult(id) {
+  const el = document.getElementById("coord-result-" + id);
+  if (el) {
+    el.classList.toggle("show");
+  }
+}
+
+function dispatchCoordinatorRequest(id) {
+  fetch('/api/coordinator/dispatch/' + id, { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.error) { console.error('Dispatch error:', data.error); return; }
+      var entry = coordinatorRequestMap.get(id);
+      if (entry) { entry.status = 'dispatched'; renderCoordinator(); }
+    })
+    .catch(function(err) { console.error('Dispatch failed:', err); });
+}
+
+function cancelCoordinatorRequest(id) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "coordinator_cancel", id: id }));
+  }
+}
+
+// Cleanup old coordinator entries every 60s
+setInterval(function() {
+  const now = Date.now();
+  let changed = false;
+  for (const [id, entry] of coordinatorRequestMap) {
+    if (entry.completedAt && (now - entry.completedAt) > 600000) {
+      coordinatorRequestMap.delete(id);
+      changed = true;
+    }
+  }
+  if (changed) renderCoordinator();
+}, 60000);
+
+/* ── Version monitoring ────────────────────────────── */
+function updateVersionBanner(info) {
+  claudeVersionInfo = info;
+  const banner = document.getElementById('versionBanner');
+  if (info.updateAvailable && !versionBannerDismissed) {
+    document.getElementById('verOld').textContent = info.installed || '?';
+    document.getElementById('verNew').textContent = info.latest || '?';
+    banner.classList.add('show');
+  } else {
+    banner.classList.remove('show');
+  }
+  renderTerminalTabs();
+}
+
+function dismissVersionBanner() {
+  document.getElementById('versionBanner').classList.remove('show');
+  versionBannerDismissed = true;
+}
+
+function showReleaseNotes() {
+  const overlay = document.getElementById('releaseNotesOverlay');
+  const body = document.getElementById('releaseNotesBody');
+  const versionSpan = document.getElementById('releaseVersion');
+  const ghLink = document.getElementById('releaseGhLink');
+  overlay.classList.add('open');
+  body.innerHTML = '<div class="dialog-loading">Loading release notes...</div>';
+
+  if (claudeVersionInfo.releaseNotes) {
+    versionSpan.textContent = 'v' + (claudeVersionInfo.latest || '');
+    body.innerHTML = simpleMarkdown(claudeVersionInfo.releaseNotes);
+    ghLink.href = claudeVersionInfo.releaseUrl || '#';
+    return;
+  }
+
+  fetch('/api/version/release-notes?version=' + encodeURIComponent(claudeVersionInfo.latest || ''))
+    .then(r => r.json())
+    .then(data => {
+      versionSpan.textContent = 'v' + (data.version || claudeVersionInfo.latest || '');
+      ghLink.href = data.url || '#';
+      body.innerHTML = data.notes
+        ? simpleMarkdown(data.notes)
+        : '<div style="color:var(--muted);text-align:center;padding:20px">No release notes available.</div>';
+    })
+    .catch(() => {
+      body.innerHTML = '<div style="color:var(--red);text-align:center;padding:20px">Failed to load release notes.</div>';
+    });
+}
+
+function closeReleaseNotes() {
+  document.getElementById('releaseNotesOverlay').classList.remove('open');
+}
+
+function simpleMarkdown(md) {
+  return esc(md)
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n\n/g, '<br><br>')
+    .replace(/<(?!\/?(?:h[23]|li|ul|code|strong|br)\b)[^>]*>/g, '');
+}
+
+function startUpdate() {
+  if (!confirm('This will stop all running sessions, update Claude Code, and you will need to restart sessions.\n\nContinue?')) return;
+  const banner = document.getElementById('versionBanner');
+  banner.querySelectorAll('.ver-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+  banner.querySelector('.ver-text').innerHTML = 'Updating Claude Code...';
+  fetch('/api/version/update', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        alert('Update failed: ' + data.error);
+        banner.querySelectorAll('.ver-btn').forEach(b => { b.disabled = false; b.style.opacity = '1'; });
+        updateVersionBanner(claudeVersionInfo);
+      } else {
+        versionBannerDismissed = false;
+      }
+    })
+    .catch(err => {
+      alert('Update request failed: ' + err.message);
+      banner.querySelectorAll('.ver-btn').forEach(b => { b.disabled = false; b.style.opacity = '1'; });
+      updateVersionBanner(claudeVersionInfo);
+    });
+}
+
+// ─── Draggable Panel Divider ─────────────────────────────────────────────
+(function() {
+  const divider = document.getElementById('panelDivider');
+  const termPanel = document.getElementById('terminalPanel');
+  const approvalPanel = document.getElementById('approvalPanel');
+  const mainSplit = document.querySelector('.main-split');
+  const STORAGE_KEY = 'sv-panel-split-pct';
+  const MIN_TERM_PX = 300;
+  const MIN_APPROVAL_PX = 250;
+
+  // Restore saved split
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) {
+    const pct = parseFloat(saved);
+    if (pct > 10 && pct < 90) {
+      termPanel.style.flex = '0 0 ' + pct + '%';
+      approvalPanel.style.flex = '0 0 ' + (100 - pct) + '%';
+    }
+  }
+
+  let dragging = false;
+
+  divider.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    dragging = true;
+    divider.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  let fitRAF = null;
+  document.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    const rect = mainSplit.getBoundingClientRect();
+    const totalW = rect.width - divider.offsetWidth;
+    let termW = e.clientX - rect.left;
+
+    // Enforce min widths
+    if (termW < MIN_TERM_PX) termW = MIN_TERM_PX;
+    if (totalW - termW < MIN_APPROVAL_PX) termW = totalW - MIN_APPROVAL_PX;
+
+    const pct = (termW / rect.width) * 100;
+    termPanel.style.flex = '0 0 ' + pct + '%';
+    approvalPanel.style.flex = '0 0 ' + (100 - pct) + '%';
+
+    // Reflow terminal during drag (throttled to animation frame)
+    if (!fitRAF) {
+      fitRAF = requestAnimationFrame(function() {
+        fitRAF = null;
+        if (typeof fitActiveTerminal === 'function') fitActiveTerminal();
+      });
+    }
+  });
+
+  document.addEventListener('mouseup', function() {
+    if (!dragging) return;
+    dragging = false;
+    divider.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+
+    // Save to localStorage
+    const rect = mainSplit.getBoundingClientRect();
+    const termRect = termPanel.getBoundingClientRect();
+    const pct = (termRect.width / rect.width) * 100;
+    localStorage.setItem(STORAGE_KEY, pct.toFixed(1));
+
+    // Resize active terminal to fit new width
+    if (typeof fitActiveTerminal === 'function') fitActiveTerminal();
+  });
+})();
+
+/* ── Eval History ──────────────────────────────────────── */
+let evalHistoryCollapsed = true;
+let evalHistoryCache = null;
+let evalHistoryDecision = '';
+
+function toggleEvalHistory() {
+  togglePanel('evalHistory');
+  if (panelState.evalHistory && evalHistoryCache === null) fetchEvalHistory(false);
+}
+
+async function fetchEvalHistory(force) {
+  if (!force && evalHistoryCache !== null) { renderEvalHistory(); return; }
+  document.getElementById('evalHistoryList').innerHTML = '<div style="padding:12px 16px;color:#555;font-size:12px;">Loading...</div>';
+  try {
+    const proj = document.getElementById('evalProjFilter').value;
+    const params = new URLSearchParams();
+    if (proj) params.set('project', proj);
+    if (evalHistoryDecision) params.set('decision', evalHistoryDecision);
+    const res = await fetch('/api/eval-history?' + params);
+    evalHistoryCache = await res.json();
+    // Populate project dropdown from data
+    const projects = [...new Set(evalHistoryCache.map(e => e.project).filter(Boolean))];
+    const sel = document.getElementById('evalProjFilter');
+    const curVal = sel.value;
+    sel.innerHTML = '<option value="">All Projects</option>' +
+      projects.map(p => `<option value="${p}"${p===curVal?' selected':''}>${p}</option>`).join('');
+    renderEvalHistory();
+  } catch(e) {
+    document.getElementById('evalHistoryList').innerHTML = '<div style="padding:12px 16px;color:#f87171;font-size:12px;">Failed to load</div>';
+  }
+}
+
+function applyEvalFilters() { evalHistoryCache = null; fetchEvalHistory(true); }
+
+function setEvalDecision(d) {
+  evalHistoryDecision = d;
+  ['evalDecAll','evalDecAppr','evalDecDeny'].forEach(id => document.getElementById(id).classList.remove('active'));
+  document.getElementById(d === '' ? 'evalDecAll' : d === 'approved' ? 'evalDecAppr' : 'evalDecDeny').classList.add('active');
+  applyEvalFilters();
+}
+
+function relTime(ts) {
+  const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  if (diff < 60) return diff + 's ago';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  return Math.floor(diff/86400) + 'd ago';
+}
+
+function renderEvalHistory() {
+  const list = document.getElementById('evalHistoryList');
+  const entries = evalHistoryCache || [];
+  document.getElementById('evalHistoryBadge').textContent = entries.length;
+  if (!entries.length) {
+    list.innerHTML = '<div style="padding:12px 16px;color:#555;font-size:12px;">No eval history</div>';
+    return;
+  }
+  list.innerHTML = entries.map((e, i) => {
+    const approved = e.decision === 'approved';
+    const conf = e.confidence != null ? Math.round(e.confidence * 100) : null;
+    const confClass = conf == null ? '' : conf >= 90 ? 'conf-high' : conf >= 70 ? 'conf-mid' : 'conf-low';
+    const confStr = conf != null ? `<span class="${confClass}">${conf}%</span>` : '';
+    const entryColor = e.project ? projColor(e.project) : '#71717a';
+    const cmd = (e.command || '').slice(0, 80) + ((e.command||'').length > 80 ? '…' : '');
+    const modelShort = (e.model||'').replace(/^claude-/,'').replace(/-\d{8}$/,'');
+    return `<div class="eval-entry ${e.decision||''}" onclick="this.classList.toggle('open')">
+  <div class="eval-entry-row">
+    <span class="eval-entry-time">${relTime(e.ts)}</span>
+    <span class="eval-entry-proj" style="background:${entryColor}22;color:${entryColor}">${e.project||'?'}</span>
+    <span class="eval-entry-tool">${e.tool||''}</span>
+    <span class="eval-entry-decision">${approved ? '&#10003;' : '&#10007;'}</span>
+    ${confStr}
+    <span class="eval-entry-cmd">${cmd.replace(/</g,'&lt;')}</span>
+  </div>
+  <div class="eval-entry-expand">${(e.command||'').replace(/</g,'&lt;')}${e.reason ? '\n\nReason: '+e.reason.replace(/</g,'&lt;') : ''}${modelShort ? '\nModel: '+modelShort : ''}</div>
+</div>`;
+  }).join('');
+}
+
+// Real-time: when an AI eval resolves, prepend it to the cache
+function handleEvalResolved(msg) {
+  if (msg.decidedBy !== 'ai' || evalHistoryCache === null) return;
+  // The approval_resolved message doesn't carry all fields, so just refresh
+  evalHistoryCache = null;
+  if (!evalHistoryCollapsed) fetchEvalHistory(true);
+}
+
+// Patch projColor for eval history (projColor is defined above as projColor)
+const projColor_fn = typeof projColor === 'function' ? projColor : () => '#71717a';
+
+// ─── Activity Log Collapsible ───────────────────────────────────────────────
+
+let activityLogCollapsed = true;
+
+function toggleActivityLog() { togglePanel('activityLog'); }
+
+// ─── Team Chat ─────────────────────────────────────────────────────────────
+
+let tcUser = new URLSearchParams(location.search).get('user') || localStorage.getItem('sv_chat_user') || null;
+if (tcUser) localStorage.setItem('sv_chat_user', tcUser);
+let tcCollapsed = true;
+let tcUnread = 0;
+const tcUnreadRooms = new Map();  // room -> count of unread messages
+let tcRoom = 'general';   // Current room
+let tcTab = 'human';       // 'human' or 'agent'
+const tcSeen = new Set();
+const tcHumanMsgs = new Map();   // room -> messages[]
+const tcAgentMsgs = new Map();   // room -> messages[] (agent chat)
+const allProjects = new Set();   // all projects (local + peers)
+
+function toggleTeamChat() {
+  togglePanel('teamChat');
+  if (panelState.teamChat) { tcUnread = 0; tcUnreadRooms.delete(tcRoom); updateTcBadge(); scrollTc(); }
+}
+
+function updateTcBadge() {
+  const b = document.getElementById('tcBadge');
+  b.textContent = tcUnread;
+  b.classList.toggle('show', tcUnread > 0);
+  // Show project pills for rooms with unread messages
+  const container = document.getElementById('tcUnreadRooms');
+  if (!container) return;
+  container.innerHTML = '';
+  for (const [room, count] of tcUnreadRooms) {
+    const pill = document.createElement('span');
+    pill.style.cssText = 'background:#1e3a5f;color:#93c5fd;font-size:10px;padding:1px 6px;border-radius:8px;cursor:pointer;white-space:nowrap';
+    pill.textContent = room + (count > 1 ? ' (' + count + ')' : '');
+    pill.onclick = (e) => { e.stopPropagation(); switchToRoom(room); };
+    container.appendChild(pill);
+  }
+}
+
+function scrollTc() {
+  const c = tcTab === 'human'
+    ? document.getElementById('teamChatMsgs')
+    : document.getElementById('tcAgentMsgs');
+  if (c) c.scrollTop = c.scrollHeight;
+}
+
+function fetchAllProjects() {
+  fetch('/api/projects/all').then(r => r.json()).then(d => {
+    (d.projects || []).forEach(p => allProjects.add(p));
+    updateTcRoomSelect();
+  }).catch(() => {});
+}
+
+function updateTcRoomSelect() {
+  const sel = document.getElementById('tcRoomSelect');
+  if (!sel) return;
+  // Collect all known rooms from both human and agent maps
+  const rooms = new Set(['general']);
+  for (const k of tcHumanMsgs.keys()) rooms.add(k);
+  for (const k of tcAgentMsgs.keys()) rooms.add(k);
+  // Add all known projects (local + peers)
+  for (const p of allProjects) rooms.add(p);
+  for (const p of knownProjects) rooms.add(p);
+  const current = sel.value || tcRoom;
+  sel.innerHTML = '';
+  for (const r of [...rooms].sort()) {
+    const opt = document.createElement('option');
+    opt.value = r;
+    opt.textContent = r === 'general' ? 'General' : r;
+    if (r === current) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  if (!rooms.has(tcRoom)) tcRoom = 'general';
+}
+
+function switchTcRoom() {
+  const sel = document.getElementById('tcRoomSelect');
+  if (!sel) return;
+  tcRoom = sel.value || 'general';
+  tcUnreadRooms.delete(tcRoom);
+  updateTcBadge();
+  renderTcPane();
+}
+
+function switchToRoom(room) {
+  tcRoom = room;
+  const sel = document.getElementById('tcRoomSelect');
+  if (sel) sel.value = room;
+  tcUnreadRooms.delete(room);
+  // Open the panel if collapsed
+  if (!panelState.teamChat) togglePanel('teamChat');
+  updateTcBadge();
+  renderTcPane();
+}
+
+function switchTcTab(tab) {
+  tcTab = tab;
+  document.querySelectorAll('.tc-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.getElementById('tcHumanPane').style.display = tab === 'human' ? '' : 'none';
+  document.getElementById('tcAgentPane').style.display = tab === 'agent' ? '' : 'none';
+  document.getElementById('tcInputBar').style.display = tab === 'human' ? '' : 'none';
+  scrollTc();
+}
+
+function renderTcPane() {
+  // Re-render human messages for current room
+  const hContainer = document.getElementById('teamChatMsgs');
+  hContainer.innerHTML = '';
+  const hMsgs = tcHumanMsgs.get(tcRoom) || [];
+  for (const msg of hMsgs) _appendHumanMsg(hContainer, msg);
+
+  // Re-render agent messages for current room
+  const aContainer = document.getElementById('tcAgentMsgs');
+  aContainer.innerHTML = '';
+  const aMsgs = tcAgentMsgs.get(tcRoom) || [];
+  for (const msg of aMsgs) _appendAgentMsg(aContainer, msg);
+
+  scrollTc();
+}
+
+function _appendHumanMsg(container, msg) {
+  const mine = msg.user === tcUser;
+  const el = document.createElement('div');
+  el.className = 'tc-msg' + (mine ? ' mine' : '');
+  el.dataset.msgId = msg.id;
+  const userColor = projColor(msg.user || 'unknown');
+  el.innerHTML = '<div class="tc-msg-head">'
+    + '<span class="tc-msg-user" style="color:' + userColor + '">' + esc(msg.user) + '</span>'
+    + (msg.instance ? '<span class="tc-msg-inst">@' + esc(msg.instance) + '</span>' : '')
+    + '</div>'
+    + '<div class="tc-msg-text">' + linkifyDocRefs(esc(msg.message)) + '</div>'
+    + '<div class="tc-msg-time">' + relTime(msg.timestamp) + '</div>';
+  container.appendChild(el);
+}
+
+function _appendAgentMsg(container, msg) {
+  const el = document.createElement('div');
+  el.className = 'tc-msg agent';
+  el.dataset.msgId = msg.id;
+  const agentColor = projColor(msg.agentName || msg.taskId || 'agent');
+  const rawPayload = (() => { try { return JSON.parse(msg.payload); } catch { return msg.payload; } })();
+  const text = typeof rawPayload === 'object'
+    ? (rawPayload.message || rawPayload.text || JSON.stringify(rawPayload))
+    : String(rawPayload || '');
+  el.innerHTML = '<div class="tc-msg-head">'
+    + '<span class="tc-msg-user" style="color:' + agentColor + '">' + esc(msg.agentName || msg.taskId || 'agent') + '</span>'
+    + '<span class="tc-msg-room">#' + esc(msg.room || 'chat') + '</span>'
+    + '</div>'
+    + '<div class="tc-msg-text">' + linkifyDocRefs(esc(text)) + '</div>'
+    + '<div class="tc-msg-time">' + relTime(msg.timestamp) + '</div>';
+  container.appendChild(el);
+}
+
+function addTcMsg(msg) {
+  if (tcSeen.has(msg.id)) return;
+  tcSeen.add(msg.id);
+  const room = msg.project || 'general';
+  if (!tcHumanMsgs.has(room)) tcHumanMsgs.set(room, []);
+  tcHumanMsgs.get(room).push(msg);
+  updateTcRoomSelect();
+  // If this room is currently visible, append the message
+  if (room === tcRoom && tcTab === 'human') {
+    const c = document.getElementById('teamChatMsgs');
+    const atBottom = c.scrollHeight - c.scrollTop - c.clientHeight < 30;
+    _appendHumanMsg(c, msg);
+    if (atBottom) scrollTc();
+  }
+}
+
+function addTcAgentMsg(msg) {
+  // msg is an agent_message with type='chat' fields: project, room, payload, timestamp, id
+  const room = msg.project || 'general';
+  if (!tcAgentMsgs.has(room)) tcAgentMsgs.set(room, []);
+  // Deduplicate by id
+  const existing = tcAgentMsgs.get(room);
+  if (existing.some(m => m.id === msg.id)) return;
+  existing.push(msg);
+  updateTcRoomSelect();
+  // If this room is currently visible in agent tab, append the message
+  if (room === tcRoom && tcTab === 'agent') {
+    const c = document.getElementById('tcAgentMsgs');
+    const atBottom = c.scrollHeight - c.scrollTop - c.clientHeight < 30;
+    _appendAgentMsg(c, msg);
+    if (atBottom) scrollTc();
+  }
+}
+
+function sendTeamChat() {
+  const input = document.getElementById('tcInput');
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  const project = tcRoom !== 'general' ? tcRoom : (activeFilter !== 'all' ? activeFilter : 'general');
+  fetch('/api/team-chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: tcUser, message, project }),
+  }).catch(err => console.error('team chat send failed', err));
+}
+
+// ─── Document Viewer ─────────────────────────────────────────────────────────
+
+function renderMarkdown(md) {
+  let html = esc(md);
+
+  // Code blocks (``` ... ```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
+    '<pre><code>' + code.trimEnd() + '</code></pre>');
+
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Bold and italic
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // Blockquotes
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // Horizontal rules
+  html = html.replace(/^---$/gm, '<hr>');
+
+  // Unordered lists
+  html = html.replace(/^[*-] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+  // Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+
+  // Paragraphs (double newlines)
+  html = html.replace(/\n\n/g, '</p><p>');
+  html = '<p>' + html + '</p>';
+
+  // Clean up empty paragraphs around block elements
+  html = html.replace(/<p><(h[1-3]|pre|ul|blockquote|hr)/g, '<$1');
+  html = html.replace(/<\/(h[1-3]|pre|ul|blockquote)><\/p>/g, '</$1>');
+  html = html.replace(/<hr><\/p>/g, '<hr>');
+  html = html.replace(/<p><\/p>/g, '');
+
+  // Single newlines to <br> inside paragraphs
+  html = html.replace(/<p>([^]*?)<\/p>/g, (match, content) => {
+    return '<p>' + content.replace(/\n/g, '<br>') + '</p>';
+  });
+
+  return html;
+}
+
+function openDocViewer(project, filename) {
+  document.getElementById('docViewerProj').textContent = project;
+  document.getElementById('docViewerName').textContent = filename;
+  document.getElementById('docViewerContent').innerHTML = '<div style="color:#666;padding:20px">Loading...</div>';
+  document.getElementById('docViewerOverlay').style.display = 'flex';
+
+  fetch(`/api/docs/${encodeURIComponent(project)}/${encodeURIComponent(filename)}`)
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        document.getElementById('docViewerContent').innerHTML = '<div style="color:#f87171">' + esc(data.error) + '</div>';
+      } else {
+        document.getElementById('docViewerContent').innerHTML = renderMarkdown(data.content);
+      }
+    })
+    .catch(() => {
+      document.getElementById('docViewerContent').innerHTML = '<div style="color:#f87171">Failed to load document</div>';
+    });
+}
+
+function closeDocViewer() {
+  document.getElementById('docViewerOverlay').style.display = 'none';
+}
+
+document.getElementById('docViewerOverlay').addEventListener('click', e => {
+  if (e.target.id === 'docViewerOverlay') closeDocViewer();
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('docViewerOverlay').style.display !== 'none') {
+    closeDocViewer();
+  }
+});
+
+function linkifyDocRefs(text) {
+  // Match doc:project/filename.md
+  return text.replace(/doc:(\w[\w-]*)\/([^\s]+\.md)/g, (match, proj, file) => {
+    return '<a href="#" class="doc-link" onclick="event.preventDefault();openDocViewer(\'' + proj.replace(/'/g, "\\'") + '\',\'' + file.replace(/'/g, "\\'") + '\')">' + match + '</a>';
+  });
+}
+
+/* ── Unified Panel System ───────────────────────────────── */
+const panelState = {};
+
+function togglePanel(name) {
+  panelState[name] = !panelState[name];
+  const body = document.getElementById(name + 'Body');
+  const toggle = document.getElementById(name + 'Toggle');
+  if (body) {
+    body.classList.toggle('open', panelState[name]);
+    const panel = body.closest('.sv-panel');
+    if (panel) {
+      panel.classList.toggle('panel-open', panelState[name]);
+      if (panelState[name]) {
+        // Reset to auto flex so it rejoins equal distribution
+        panel.style.flex = '';
+        panel.style.flexBasis = '';
+      }
+    }
+  }
+  if (toggle) toggle.innerHTML = panelState[name] ? '&#9660;' : '&#9654;';
+  savePanelOrder();
+  initPanelDividers();
+}
+
+let dragPanel = null;
+
+function initPanelDrag() {
+  document.querySelectorAll('.sv-panel').forEach(panel => {
+    // Only the header initiates drag — body content stays selectable
+    const hdr = panel.querySelector('.sv-panel-hdr');
+    if (hdr) {
+      hdr.draggable = true;
+      hdr.addEventListener('dragstart', e => {
+        dragPanel = panel;
+        panel.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+      });
+    }
+    panel.addEventListener('dragend', () => {
+      panel.classList.remove('dragging');
+      document.querySelectorAll('.sv-panel.drag-over').forEach(p => p.classList.remove('drag-over'));
+      dragPanel = null;
+      savePanelOrder();
+    });
+    panel.addEventListener('dragover', e => {
+      e.preventDefault();
+      if (panel !== dragPanel) panel.classList.add('drag-over');
+    });
+    panel.addEventListener('dragleave', () => panel.classList.remove('drag-over'));
+    panel.addEventListener('drop', e => {
+      e.preventDefault();
+      panel.classList.remove('drag-over');
+      if (dragPanel && dragPanel !== panel) {
+        const container = panel.parentNode;
+        const panels = [...container.querySelectorAll('.sv-panel')];
+        const fromIdx = panels.indexOf(dragPanel);
+        const toIdx = panels.indexOf(panel);
+        if (fromIdx < toIdx) {
+          panel.after(dragPanel);
+        } else {
+          panel.before(dragPanel);
+        }
+        initPanelDividers();
+      }
+    });
+  });
+}
+
+function initPanelDividers() {
+  const container = document.querySelector('.approval-scroll');
+  if (!container) return;
+
+  // Remove any existing dividers
+  container.querySelectorAll('.panel-divider-h').forEach(d => d.remove());
+
+  // Get all panels in DOM order
+  const panels = [...container.querySelectorAll('.sv-panel')];
+
+  // Insert a divider between each adjacent pair
+  for (let i = 0; i < panels.length - 1; i++) {
+    const divider = document.createElement('div');
+    divider.className = 'panel-divider-h';
+    panels[i].after(divider);
+
+    divider.addEventListener('mousedown', e => {
+      const above = divider.previousElementSibling;
+      const below = divider.nextElementSibling;
+      // Skip if either neighbour isn't an open panel
+      if (!above || !above.classList.contains('sv-panel') || !above.classList.contains('panel-open')) return;
+      if (!below || !below.classList.contains('sv-panel') || !below.classList.contains('panel-open')) return;
+
+      e.preventDefault();
+      divider.classList.add('dragging');
+
+      // Snapshot starting sizes
+      let startY = e.clientY;
+      let aboveH = above.getBoundingClientRect().height;
+      let belowH = below.getBoundingClientRect().height;
+      const MIN = 60;
+
+      function onMouseMove(ev) {
+        const delta = ev.clientY - startY;
+        let newAbove = aboveH + delta;
+        let newBelow = belowH - delta;
+        if (newAbove < MIN) { newAbove = MIN; newBelow = aboveH + belowH - MIN; }
+        if (newBelow < MIN) { newBelow = MIN; newAbove = aboveH + belowH - MIN; }
+        above.style.flex = `0 0 ${newAbove}px`;
+        above.style.flexBasis = `${newAbove}px`;
+        below.style.flex = `0 0 ${newBelow}px`;
+        below.style.flexBasis = `${newBelow}px`;
+      }
+
+      function onMouseUp() {
+        divider.classList.remove('dragging');
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        savePanelOrder();
+      }
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+  }
+}
+
+function savePanelOrder() {
+  const order = [...document.querySelectorAll('.sv-panel')].map(p => p.dataset.panel);
+  const openPanels = Object.entries(panelState).filter(([,v]) => v).map(([k]) => k);
+  const heights = {};
+  for (const name of order) {
+    const panel = document.querySelector(`.sv-panel[data-panel="${name}"]`);
+    if (panel && panel.style.flexBasis && panel.style.flexBasis !== '') {
+      heights[name] = panel.style.flexBasis;
+    }
+  }
+  localStorage.setItem('sv_panel_order', JSON.stringify(order));
+  localStorage.setItem('sv_panel_open', JSON.stringify(openPanels));
+  localStorage.setItem('sv_panel_heights', JSON.stringify(heights));
+}
+
+function restorePanelOrder() {
+  try {
+    let order = JSON.parse(localStorage.getItem('sv_panel_order') || '[]');
+    let openPanels = JSON.parse(localStorage.getItem('sv_panel_open') || '["approvals","operations"]');
+
+    // Migrate old panel names: 'agents' and 'coordinator' -> 'operations'
+    order = order.filter(n => n !== 'agents' && n !== 'coordinator');
+    if (!order.includes('operations')) order.splice(1, 0, 'operations'); // insert after approvals
+    openPanels = openPanels.map(n => (n === 'agents' || n === 'coordinator') ? 'operations' : n);
+    // Deduplicate
+    openPanels = [...new Set(openPanels)];
+
+    const container = document.querySelector('.approval-scroll');
+    if (order.length && container) {
+      for (const name of order) {
+        const panel = container.querySelector(`[data-panel="${name}"]`);
+        if (panel) container.appendChild(panel);
+      }
+    }
+    // Default open panels if nothing in localStorage
+    const defaults = order.length ? openPanels : ['approvals', 'operations'];
+    const heights = JSON.parse(localStorage.getItem('sv_panel_heights') || '{}');
+    for (const name of defaults) {
+      panelState[name] = true;
+      const body = document.getElementById(name + 'Body');
+      const toggle = document.getElementById(name + 'Toggle');
+      if (body) {
+        body.classList.add('open');
+        const panel = body.closest('.sv-panel');
+        if (panel) panel.classList.add('panel-open');
+      }
+      if (toggle) toggle.innerHTML = '&#9660;';
+      if (heights[name]) {
+        const panel = document.querySelector(`.sv-panel[data-panel="${name}"]`);
+        if (panel) { panel.style.flex = `0 0 ${heights[name]}`; panel.style.flexBasis = heights[name]; }
+      }
+    }
+  } catch(e) {}
+}
+
+function updateApprovalsBadge() {
+  const count = document.querySelectorAll('#cards .card').length;
+  const badge = document.getElementById('approvalsBadge');
+  if (badge) badge.textContent = count;
+}
+
+/* ── Image/file drop / paste ────────────────────────────── */
+(function initImageDrop() {
+  const container = document.getElementById('termContainer');
+  const overlay = document.getElementById('dropOverlay');
+  if (!container || !overlay) return;
+
+  let dragCounter = 0; // track nested dragenter/dragleave
+
+  const TEXT_EXTENSIONS = new Set([
+    'js','ts','py','json','yaml','yml','md','txt','csv','xml','html','css',
+    'sh','bash','conf','cfg','ini','toml','log','sql','go','rs','rb','java',
+    'c','cpp','h','hpp','env',
+  ]);
+
+  function getExt(filename) {
+    const m = (filename || '').match(/\.([^.]+)$/);
+    return m ? m[1].toLowerCase() : '';
+  }
+
+  function isTextFile(file) {
+    if (file.type.startsWith('text/')) return true;
+    // env.example and similar dotfiles with compound extensions
+    const name = file.name || '';
+    if (/\.env\.example$/.test(name)) return true;
+    return TEXT_EXTENSIONS.has(getExt(name));
+  }
+
+  function hasImageFile(dataTransfer) {
+    if (!dataTransfer) return false;
+    for (const item of dataTransfer.items) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) return true;
+    }
+    return false;
+  }
+
+  function hasFile(dataTransfer) {
+    if (!dataTransfer) return false;
+    for (const item of dataTransfer.items) {
+      if (item.kind === 'file') return true;
+    }
+    return false;
+  }
+
+  function sendImageFile(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Image too large (max 10MB)');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const base64 = e.target.result.split(',')[1]; // strip data:...;base64, prefix
+      const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'image_drop',
+          terminalId: activeTerminalId,
+          project: tab ? tab.project : null,
+          filename: file.name,
+          data: base64,
+        }));
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function sendFile(file) {
+    if (!file) return;
+    if (file.type.startsWith('image/')) {
+      sendImageFile(file);
+      return;
+    }
+    if (!isTextFile(file)) {
+      alert('Unsupported file type: ' + (file.type || getExt(file.name) || 'unknown'));
+      return;
+    }
+    if (file.size > 1 * 1024 * 1024) {
+      alert('Text file too large (max 1MB)');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'file_drop',
+          terminalId: activeTerminalId,
+          project: tab ? tab.project : null,
+          filename: file.name,
+          data: e.target.result,
+          mimeType: file.type,
+        }));
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  container.addEventListener('dragenter', function(e) {
+    e.preventDefault();
+    if (hasFile(e.dataTransfer)) {
+      dragCounter++;
+      overlay.classList.add('active');
+    }
+  });
+
+  container.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+
+  container.addEventListener('dragleave', function(e) {
+    dragCounter--;
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      overlay.classList.remove('active');
+    }
+  });
+
+  container.addEventListener('drop', function(e) {
+    e.preventDefault();
+    dragCounter = 0;
+    overlay.classList.remove('active');
+    const files = e.dataTransfer.files;
+    if (files.length > 0) sendFile(files[0]);
+  });
+
+  // Ctrl+V paste with file in clipboard
+  document.addEventListener('paste', function(e) {
+    if (!activeTerminalId) return;
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.kind === 'file') {
+        e.preventDefault();
+        sendFile(item.getAsFile());
+        return;
+      }
+    }
+  });
+})();
+
+/* ── Image drop confirmation ────────────────────────────── */
+// Handled in the WS message switch: case 'image_drop_saved'
+
+// Call restore and init after DOM is ready
+restorePanelOrder();
+initPanelDrag();
+initPanelDividers();
+fetchAllProjects();
+
+connect();
+</script>
+</body>
+</html>

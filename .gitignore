@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.*
+logs/
+drops/
+.claude/
+*.log
+bin/refresh-token.sh
+bin/sync-elena-hooks.sh
+docs/launch-posts.md

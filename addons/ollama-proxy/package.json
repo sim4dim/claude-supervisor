@@ -1,0 +1,12 @@
+{
+  "name": "claude-ollama-proxy",
+  "version": "1.0.0",
+  "description": "Ollama-compatible API proxy for Claude models via claude -p CLI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.0"
+  }
+}

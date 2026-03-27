@@ -1,0 +1,181 @@
+<!-- SUPERVISOR-START — managed by claude-supervisor, do not edit this section -->
+# Supervisor Work Instructions
+
+{{ROLE}}
+
+## Session Start: Check for Previous Context
+
+When you start a new session, FIRST check if `.claude/progress-snapshot.md` exists. If it does, read it — it contains a snapshot of the previous session's state, including git status, recent commits, uncommitted changes, agent activity, and pending approvals. Use it to resume where the previous session left off instead of starting from scratch. Ask the user if they want to continue the previous work or start something new.
+
+## MANDATORY: Delegate All Work to Subagents
+
+You MUST use the Task tool (subagents) for ALL implementation work — reading files, editing code, running commands, searching the codebase. Your main context window is for coordination only: understand the request, plan briefly, delegate via Task, review results. Every tool call in the main context consumes your context window and accelerates compaction. If your project's CLAUDE.md has subagent configuration details (model choice, sandbox settings, specific commands), follow those — this section only establishes the delegation requirement.
+
+**Specific work that MUST be delegated (never do these in the main context):**
+- Web searches and web fetches (WebSearch, WebFetch)
+- Multi-file code reads or reviews
+- Writing or editing code files
+- Running test suites, builds, or linters
+- Deployment commands or SSH sessions
+- Any research requiring more than 2-3 tool calls
+- Large file reads (>200 lines)
+
+**Subagent turn budgets:** When spawning agents for research-heavy work (web searches, multi-file exploration, deep investigation), use the `researcher` subagent_type which has a generous turn budget. For inline Agent() calls without a subagent_type, prefer the named agent types (`researcher`, `implementer`, `planner`, `reviewer`) so they inherit the configured maxTurns. Do NOT try to `resume` a background agent that is still running — wait for the completion notification, then use `TaskOutput` to read results.
+
+**The ONLY things the main context should do directly:**
+- Read the user's request and plan the approach
+- Spawn subagents via Task tool and review their results
+- Communicate with the user (ask clarifying questions, report progress)
+- Quick single git commands (status, log, diff) for orientation
+
+## Subagent Communication via MQTT
+
+The `sv` helper is on PATH for publishing status to the supervisor dashboard and for inter-agent coordination. All `sv` commands are auto-approved — no supervisor delay.
+
+### If You Are a Subagent (spawned via Task tool)
+
+You MUST report status. At the **start** of your work:
+```bash
+export SV_TASK_ID="<kebab-case-description>"  # e.g., "fix-auth-bug"
+sv pub status started "<what you are doing>"
+```
+
+During work — publish progress and discoveries:
+```bash
+sv pub progress 50 "Found 3 affected files, patching now"
+sv pub discovery "Auth tokens expire after 1h, not 24h as documented"
+```
+
+At the **end**:
+```bash
+sv pub status completed
+```
+
+### Automatic Collaboration via Chat Rooms
+
+If your task prompt mentions a chat room name (e.g., "chat room: design-review"), you are part of a multi-agent collaboration. Set the room and use it:
+
+```bash
+export SV_CHAT_ROOM="<room-name-from-prompt>"
+
+# At start: read what other agents have posted
+sv chat history "$SV_CHAT_ROOM"
+
+# After your work: post your key findings
+sv chat post "$SV_CHAT_ROOM" "[$SV_TASK_ID] <your results or recommendations>"
+```
+
+If no chat room is mentioned in your task prompt, skip chat — you are working solo.
+
+### Inter-Agent Chat (for debates, reviews, coordination)
+
+When multiple agents need to discuss (e.g., architect + operator review):
+```bash
+# Moderator sets up the room
+sv chat init review
+
+# Agent posts (seq auto-increments, returns seq number)
+export SV_AGENT_NAME="architect"
+sv chat post review "PROPOSAL: Eliminate dual control path"
+
+# Other agent waits for their turn, then reads + replies
+sv chat wait review 1          # blocks until seq >= 1, returns message
+sv chat post review "COUNTER: Need backward compat for 2 weeks"
+
+# Read latest message anytime
+sv chat read review
+
+# Clean up when done
+sv chat clear review
+```
+
+### Retained Data Exchange (for handing off findings between agents)
+
+```bash
+# Agent A publishes findings for Agent B to read later
+sv retain "supervisor/myproject/agent-a/findings" '{"files":["auth.js","db.js"],"issue":"..."}'
+
+# Agent B reads them (blocks up to 30s for a message)
+sv read "supervisor/myproject/agent-a/findings"
+
+# Clean up
+sv clear "supervisor/myproject/agent-a/findings"
+```
+
+### Asking for Help (Cross-Project Coordinator)
+
+If you need information from another project or need someone to perform an action elsewhere, use the coordinator:
+
+#### Request Help
+```bash
+sv request "Check if getUserById returns null or throws on missing user" --project auth-service --type research
+# Prints a request-id you can use to wait for the response
+```
+
+#### Wait for Response
+```bash
+result=$(sv request wait <request-id> 120)
+echo "$result"  # JSON with the findings
+```
+
+#### Respond to a Coordinator Request
+If you see a COORDINATOR REQUEST prompt in your session, investigate and respond:
+```bash
+sv respond <request-id> "getUserById returns null on missing user (line 45 of src/users.js)"
+```
+
+#### Request Types
+- `research` — investigate and report findings (read-only)
+- `action` — make changes in the target project
+- `review` — review code or approach and give feedback
+
+#### Flags
+- `--project <name>` — target a specific project (dispatched to its running session)
+- `--type <type>` — request type (default: research)
+- `--context <text>` — additional context for the handler
+- `--timeout <secs>` — how long to wait before timeout (default: 300)
+
+### Environment Variables
+
+- `SV_TASK_ID` — your task identifier (set this at start, used by `sv pub`)
+- `SV_AGENT_NAME` — your name in chat messages (defaults to SV_TASK_ID)
+- `SV_PROJECT` — override project name (defaults to basename of `$CLAUDE_PROJECT_DIR`)
+
+## Long-Running Commands
+
+For any command expected to take more than 30 seconds (SSH sessions, remote diagnostics, deployments, large builds):
+
+1. **Use `run_in_background: true`** on the Bash tool call -- this prevents blocking your context window
+2. **Use subagents** for sequences of remote commands -- spawn a Task agent to run the full sequence
+3. **Check results later** with `TaskOutput` -- don't wait synchronously
+
+If you're running 3+ remote commands in sequence, delegate the whole sequence to a subagent.
+
+## Post-Compaction Recovery
+
+When your context is auto-compacted (conversation history compressed to fit the context window), you lose detailed memory of previous work. **This file is re-read after compaction**, so these instructions help you recover.
+
+### Immediately After Compaction
+
+Do NOT continue working from compressed memory — it is unreliable. Instead:
+
+1. **Read progress snapshot**: Use `Read` to read `.claude/progress-snapshot.md` — this file is auto-generated before compaction with git state, recent commits, uncommitted changes, and agent activity. It is your primary recovery tool.
+2. **Check task list**: Use `TaskList` to see pending, in-progress, and completed tasks
+3. **Check git state**: Run `git status` and `git diff` to see uncommitted changes
+4. **Check git log**: Run `git log --oneline -10` to see recent commits and understand what's been done
+5. **Re-read relevant files**: If you were editing files, read them again to understand the current state
+6. **Ask the user**: If you're unsure what you were doing, ask "I just went through context compaction — what should I focus on?"
+
+### What NOT to Do After Compaction
+
+- Do NOT assume your compressed memory is accurate — verify everything against actual files
+- Do NOT repeat work that git log shows was already committed
+- Do NOT continue a multi-step plan from memory without re-reading the relevant files first
+- Do NOT make changes based on file contents you "remember" — read them fresh
+
+### Preventing Compaction Issues
+
+- Commit working changes frequently so progress isn't lost
+- Use subagents for heavy work to keep main context lean
+- Keep main context for coordination, not implementation details
+<!-- SUPERVISOR-END -->

@@ -1,0 +1,20 @@
+[Unit]
+Description=Claude Code Supervisor (port %i)
+After=network.target
+
+[Service]
+Type=simple
+# SOURCE_DIR is set per-instance in the override (add-user.sh creates it)
+# WorkingDirectory is set in the per-instance override conf
+ExecStart=/usr/local/bin/node server.js
+Restart=on-failure
+RestartSec=5
+
+# Port from instance name (e.g., claude-supervisor@3847)
+Environment=SUPERVISOR_PORT=%i
+
+# Per-instance config
+EnvironmentFile=/etc/claude-supervisor/%i.env
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,25 @@
+[Unit]
+Description=Claude Supervisor (port 3847)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/path/to/claude-supervisor
+EnvironmentFile=/path/to/claude-supervisor/.env
+Environment=PATH=/path/to/node/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/path/to/node server.js
+Restart=always
+RestartSec=5
+# Allow up to 10 restarts in 5 minutes before giving up
+StartLimitIntervalSec=300
+StartLimitBurst=10
+StandardOutput=append:/path/to/claude-supervisor/logs/supervisor.log
+StandardError=append:/path/to/claude-supervisor/logs/supervisor.log
+TimeoutStopSec=10
+# Only kill the main node process — dtach sessions must survive server restarts
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

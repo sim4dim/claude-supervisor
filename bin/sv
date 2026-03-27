@@ -1,0 +1,567 @@
+#!/usr/bin/env bash
+# sv — supervisor MQTT helper for Claude Code agents
+#
+# Usage:
+#   sv pub status started "Investigating auth bug"
+#   sv pub status completed
+#   sv pub progress 50 "Found 3 affected files"
+#   sv pub discovery "Auth tokens expire after 1h"
+#   sv pub coordination "Interface changed: getUserById returns Promise<User|null>"
+#   sv chat post mytopic "PROPOSAL #1: Eliminate dual control path"
+#   sv chat wait mytopic 5           # wait for seq >= 5
+#   sv chat read mytopic             # read latest message
+#   sv chat history mytopic          # read all messages in room
+#   sv chat clear mytopic            # clear retained messages
+#   sv chat post --project shared myroom "hello"   # cross-project room
+#   sv chat history --project shared myroom        # read cross-project room
+#   sv read some/topic               # read one message (retained or next published)
+#   sv retain some/topic '{"key":"val"}'  # publish retained message
+#   sv clear some/topic              # clear retained message
+#   sv request "Check auth schema" --project auth-service
+#   sv respond <request-id> "Schema uses JWT tokens"
+#   sv request wait <request-id> 120
+#   sv task create "Add email digest" [--priority 2] [--blocked-by sv-a1b2c3]
+#   sv task list [--status pending|in_progress|completed|all]
+#   sv task ready
+#   sv task update <id> --status in_progress
+#   sv task start <id>
+#   sv task close <id>
+
+set -euo pipefail
+
+MQTT_HOST="${SUPERVISOR_MQTT_HOST:-localhost}"
+MQTT_BACKUP="${SUPERVISOR_MQTT_BACKUP_HOST:-}"
+MQTT_BACKUP_USER="${SUPERVISOR_MQTT_BACKUP_USER:-}"
+MQTT_BACKUP_PASS="${SUPERVISOR_MQTT_BACKUP_PASS:-}"
+PROJECT="${SV_PROJECT:-$(basename "${CLAUDE_PROJECT_DIR:-$PWD}")}"
+export SV_PROJECT="$PROJECT"
+TASK_ID="${SV_TASK_ID:-agent}"
+
+_backup_args() {
+  local args=(-h "$MQTT_BACKUP")
+  [[ -n "$MQTT_BACKUP_USER" ]] && args+=(-u "$MQTT_BACKUP_USER")
+  [[ -n "$MQTT_BACKUP_PASS" ]] && args+=(-P "$MQTT_BACKUP_PASS")
+  echo "${args[@]}"
+}
+
+_pub() {
+  if timeout 3 mosquitto_pub -h "$MQTT_HOST" "$@" 2>/dev/null; then
+    # Also replicate to backup (fire and forget)
+    if [[ -n "$MQTT_BACKUP" ]]; then
+      local backup_args=(-h "$MQTT_BACKUP")
+      [[ -n "$MQTT_BACKUP_USER" ]] && backup_args+=(-u "$MQTT_BACKUP_USER")
+      [[ -n "$MQTT_BACKUP_PASS" ]] && backup_args+=(-P "$MQTT_BACKUP_PASS")
+      timeout 3 mosquitto_pub "${backup_args[@]}" "$@" 2>/dev/null &
+    fi
+  elif [[ -n "$MQTT_BACKUP" ]]; then
+    # Primary failed, try backup
+    local backup_args=(-h "$MQTT_BACKUP")
+    [[ -n "$MQTT_BACKUP_USER" ]] && backup_args+=(-u "$MQTT_BACKUP_USER")
+    [[ -n "$MQTT_BACKUP_PASS" ]] && backup_args+=(-P "$MQTT_BACKUP_PASS")
+    timeout 3 mosquitto_pub "${backup_args[@]}" "$@" 2>/dev/null
+  else
+    return 1
+  fi
+}
+
+_sub() {
+  # Try primary first
+  if mosquitto_sub -h "$MQTT_HOST" "$@" 2>/dev/null; then
+    return 0
+  fi
+  # Primary failed — try backup if configured
+  if [[ -n "$MQTT_BACKUP" ]]; then
+    local backup_args=(-h "$MQTT_BACKUP")
+    [[ -n "$MQTT_BACKUP_USER" ]] && backup_args+=(-u "$MQTT_BACKUP_USER")
+    [[ -n "$MQTT_BACKUP_PASS" ]] && backup_args+=(-P "$MQTT_BACKUP_PASS")
+    mosquitto_sub "${backup_args[@]}" "$@" 2>/dev/null
+  else
+    return 1
+  fi
+}
+
+# Build JSON object from key=value pairs. Numeric values auto-detected.
+# Strips \! artifacts from shell escaping.
+_json() {
+  python3 -c "
+import json, sys
+obj = {}
+for kv in sys.argv[1:]:
+    k, v = kv.split('=', 1)
+    v = v.replace('\\\!', '!')
+    try:
+        v = int(v)
+    except ValueError:
+        try:
+            v = float(v)
+        except ValueError:
+            pass
+    obj[k] = v
+print(json.dumps(obj, ensure_ascii=False))
+" "$@"
+}
+
+# ─── sv pub ──────────────────────────────────────────────────────────────────
+
+cmd_pub() {
+  local type="${1:?Usage: sv pub <status|progress|discovery|coordination> ...}"
+  shift
+
+  case "$type" in
+    status)
+      local status="${1:?Usage: sv pub status <started|completed|failed> [description]}"
+      local desc="${2:-}"
+      if [[ -n "$desc" ]]; then
+        _pub -t "supervisor/$PROJECT/$TASK_ID/status" -m "$(_json "status=$status" "description=$desc")"
+      else
+        _pub -t "supervisor/$PROJECT/$TASK_ID/status" -m "$(_json "status=$status")"
+      fi
+      ;;
+    progress)
+      local pct="${1:?Usage: sv pub progress <percent> <message>}"
+      local msg="${2:?Usage: sv pub progress <percent> <message>}"
+      _pub -t "supervisor/$PROJECT/$TASK_ID/progress" -m "$(_json "percent=$pct" "message=$msg")"
+      ;;
+    discovery)
+      local finding="${1:?Usage: sv pub discovery <finding>}"
+      _pub -t "supervisor/$PROJECT/$TASK_ID/discovery" -m "$(_json "finding=$finding")"
+      ;;
+    coordination)
+      local msg="${1:?Usage: sv pub coordination <message>}"
+      _pub -t "supervisor/$PROJECT/$TASK_ID/coordination" -m "$(_json "message=$msg")"
+      ;;
+    alert)
+      local alert_type="${1:?Usage: sv pub alert <type> <message>}"
+      local alert_msg="${2:?Usage: sv pub alert <type> <message>}"
+      _pub -t "supervisor/$PROJECT/alert/$alert_type" -m "$(_json "type=$alert_type" "message=$alert_msg" "severity=alert" "ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+      ;;
+    *)
+      echo "Unknown pub type: $type (use status|progress|discovery|coordination|alert)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# ─── sv chat ─────────────────────────────────────────────────────────────────
+
+_chat_topic() { echo "supervisor/$1/chat/$2"; }
+_chat_seq_topic() { echo "supervisor/$1/chat/$2/seq"; }
+_chat_msg_topic() { echo "supervisor/$1/chat/$2/messages/$3"; }
+
+cmd_chat() {
+  local action="${1:?Usage: sv chat <post|wait|read|clear|init|history> <room> ...}"
+  shift
+
+  # Optional --project flag overrides PROJECT for this chat command
+  local CHAT_PROJECT="$PROJECT"
+  if [[ "${1:-}" == "--project" ]]; then
+    CHAT_PROJECT="${2:?--project requires a value}"
+    shift 2
+  fi
+
+  case "$action" in
+    init)
+      local room="${1:?Usage: sv chat init <room>}"
+      # Read current seq to know how many message topics to clear
+      local cur_seq
+      cur_seq=$(_sub -t "$(_chat_seq_topic "$CHAT_PROJECT" "$room")" -C 1 -W 2 2>/dev/null || echo "0")
+      # Clear existing per-message topics (cap at 100 for efficiency)
+      if [[ "$cur_seq" -gt 0 ]] 2>/dev/null; then
+        local max=$((cur_seq > 100 ? 100 : cur_seq))
+        for ((i=1; i<=max; i++)); do
+          _pub -r -n -t "$(_chat_msg_topic "$CHAT_PROJECT" "$room" "$i")"
+        done
+      fi
+      # Clear legacy room topic
+      _pub -r -n -t "$(_chat_topic "$CHAT_PROJECT" "$room")"
+      # Reset seq counter to 0
+      _pub -r -n -t "$(_chat_seq_topic "$CHAT_PROJECT" "$room")"
+      _pub -r -t "$(_chat_seq_topic "$CHAT_PROJECT" "$room")" -m "0"
+      ;;
+    post)
+      local room="${1:?Usage: sv chat post <room> <message>}"
+      local msg="${2:?Usage: sv chat post <room> <message>}"
+      local from="${SV_AGENT_NAME:-$TASK_ID}"
+      local cur_seq
+      cur_seq=$(_sub -t "$(_chat_seq_topic "$CHAT_PROJECT" "$room")" -C 1 -W 5 2>/dev/null || echo "0")
+      local next_seq=$((cur_seq + 1))
+      # Publish to per-message retained topic
+      _pub -r -t "$(_chat_msg_topic "$CHAT_PROJECT" "$room" "$next_seq")" \
+        -m "$(_json "from=$from" "seq=$next_seq" "msg=$msg")"
+      # Update seq counter
+      _pub -r -t "$(_chat_seq_topic "$CHAT_PROJECT" "$room")" -m "$next_seq"
+      echo "$next_seq"
+      ;;
+    wait)
+      local room="${1:?Usage: sv chat wait <room> <target-seq> [timeout]}"
+      local target="${2:?Usage: sv chat wait <room> <target-seq> [timeout]}"
+      local timeout="${3:-120}"
+      local elapsed=0 seq=0
+      while [[ $elapsed -lt $timeout ]]; do
+        seq=$(_sub -t "$(_chat_seq_topic "$CHAT_PROJECT" "$room")" -C 1 -W 3 2>/dev/null || echo "0")
+        if [[ "$seq" -ge "$target" ]] 2>/dev/null; then
+          # Read the specific message topic for the target seq
+          _sub -t "$(_chat_msg_topic "$CHAT_PROJECT" "$room" "$target")" -C 1 -W 5 2>/dev/null
+          return 0
+        fi
+        elapsed=$((elapsed + 3))
+      done
+      echo "Timeout waiting for seq >= $target (got $seq after ${timeout}s)" >&2
+      return 1
+      ;;
+    read)
+      local room="${1:?Usage: sv chat read <room> [timeout]}"
+      local timeout="${2:-10}"
+      # Read current seq, then fetch that specific message
+      local cur_seq
+      cur_seq=$(_sub -t "$(_chat_seq_topic "$CHAT_PROJECT" "$room")" -C 1 -W "$timeout" 2>/dev/null || echo "0")
+      if [[ "$cur_seq" -gt 0 ]] 2>/dev/null; then
+        _sub -t "$(_chat_msg_topic "$CHAT_PROJECT" "$room" "$cur_seq")" -C 1 -W 5 2>/dev/null
+      fi
+      ;;
+    history)
+      local room="${1:?Usage: sv chat history <room>}"
+      local cur_seq
+      cur_seq=$(_sub -t "$(_chat_seq_topic "$CHAT_PROJECT" "$room")" -C 1 -W 5 2>/dev/null || echo "0")
+      if [[ "$cur_seq" -le 0 ]] 2>/dev/null; then
+        echo "No messages in room '$room'" >&2
+        return 0
+      fi
+      for ((i=1; i<=cur_seq; i++)); do
+        _sub -t "$(_chat_msg_topic "$CHAT_PROJECT" "$room" "$i")" -C 1 -W 2 2>/dev/null
+      done
+      ;;
+    clear)
+      local room="${1:?Usage: sv chat clear <room>}"
+      local cur_seq
+      cur_seq=$(_sub -t "$(_chat_seq_topic "$CHAT_PROJECT" "$room")" -C 1 -W 5 2>/dev/null || echo "0")
+      # Clear per-message topics (cap at 100 for efficiency)
+      if [[ "$cur_seq" -gt 0 ]] 2>/dev/null; then
+        local max=$((cur_seq > 100 ? 100 : cur_seq))
+        for ((i=1; i<=max; i++)); do
+          _pub -r -n -t "$(_chat_msg_topic "$CHAT_PROJECT" "$room" "$i")"
+        done
+      fi
+      # Clear legacy room topic and seq counter
+      _pub -r -n -t "$(_chat_topic "$CHAT_PROJECT" "$room")"
+      _pub -r -n -t "$(_chat_seq_topic "$CHAT_PROJECT" "$room")"
+      ;;
+    *)
+      echo "Unknown chat action: $action (use init|post|wait|read|clear|history)" >&2; exit 1
+      ;;
+  esac
+}
+
+# ─── sv read / retain / clear ───────────────────────────────────────────────
+
+cmd_read() {
+  local topic="${1:?Usage: sv read <topic> [timeout]}"
+  local timeout="${2:-30}"
+  _sub -t "$topic" -C 1 -W "$timeout" 2>/dev/null
+}
+
+cmd_retain() {
+  local topic="${1:?Usage: sv retain <topic> <json>}"
+  local payload="${2:?Usage: sv retain <topic> <json>}"
+  _pub -r -t "$topic" -m "$payload"
+}
+
+cmd_clear() {
+  local topic="${1:?Usage: sv clear <topic>}"
+  _pub -r -n -t "$topic"
+}
+
+# ─── sv request / respond ─────────────────────────────────────────────────────
+
+cmd_request() {
+  # If first arg is "wait", handle the wait subcommand
+  if [[ "${1:-}" == "wait" ]]; then
+    shift
+    local request_id="${1:?Usage: sv request wait <request-id> [timeout]}"
+    local timeout="${2:-120}"
+    local instance="${SV_INSTANCE:-$(hostname -s)}"
+    _sub -t "coordinator/${instance}/responses/${request_id}" -C 1 -W "$timeout" 2>/dev/null
+    return $?
+  fi
+
+  local desc=""
+  local target_project=""
+  local req_type="research"
+  local context=""
+  local timeout=300
+  local env_pairs=()
+
+  # Parse args: first positional is description, then flags
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project) target_project="$2"; shift 2 ;;
+      --type) req_type="$2"; shift 2 ;;
+      --context) context="$2"; shift 2 ;;
+      --timeout) timeout="$2"; shift 2 ;;
+      --env) env_pairs+=("$2"); shift 2 ;;
+      *)
+        if [[ -z "$desc" ]]; then
+          desc="$1"
+        else
+          desc="$desc $1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$desc" ]]; then
+    echo "Usage: sv request <description> [--project <name>] [--type <type>] [--timeout <secs>] [--env KEY=VALUE]" >&2
+    exit 1
+  fi
+
+  local instance="${SV_INSTANCE:-$(hostname -s)}"
+  local request_id
+  request_id=$(python3 -c "import uuid; print(uuid.uuid4())")
+  local from_agent="${SV_AGENT_NAME:-$TASK_ID}"
+
+  local payload
+  payload=$(python3 -c "
+import json, sys, os
+# Args: request_id, instance, from_agent, type, description, context, target_project, timeout, env_pairs...
+request_id, instance, from_agent, req_type, desc, context, target_project, timeout = sys.argv[1:9]
+env_pairs = sys.argv[9:]
+env_obj = {}
+for pair in env_pairs:
+    k, v = pair.split('=', 1)
+    env_obj[k] = v
+obj = {
+    'id': request_id,
+    'from': {
+        'instance': instance,
+        'project': os.environ.get('SV_PROJECT', os.environ.get('PROJECT', 'unknown')),
+        'agent': from_agent
+    },
+    'type': req_type,
+    'description': desc,
+    'context': context,
+    'target_project': target_project,
+    'priority': 'normal',
+    'timeout': int(timeout),
+    'timestamp': __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat().replace('+00:00', 'Z')
+}
+if env_obj:
+    obj['env'] = env_obj
+print(json.dumps(obj, ensure_ascii=False))
+" "$request_id" "$instance" "$from_agent" "$req_type" "$desc" "$context" "$target_project" "$timeout" "${env_pairs[@]+"${env_pairs[@]}"}")
+
+  _pub -r -t "coordinator/${instance}/requests/${request_id}" -m "$payload"
+  echo "$request_id"
+}
+
+cmd_respond() {
+  local request_id="${1:?Usage: sv respond <request-id> <result>}"
+  local result="${2:?Usage: sv respond <request-id> <result>}"
+
+  local payload
+  payload=$(python3 -c "
+import json, sys, uuid, datetime
+obj = {
+    'id': str(uuid.uuid4()),
+    'request_id': sys.argv[1],
+    'status': 'completed',
+    'result': sys.argv[2],
+    'agent': sys.argv[3],
+    'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
+}
+print(json.dumps(obj, ensure_ascii=False))
+" "$request_id" "$result" "${SV_AGENT_NAME:-$TASK_ID}")
+
+  local instance="${SV_INSTANCE:-$(hostname -s)}"
+  _pub -r -t "coordinator/${instance}/responses/${request_id}" -m "$payload"
+  echo "Response published for $request_id"
+}
+
+# ─── sv task ─────────────────────────────────────────────────────────────────
+
+_tasks_file() {
+  local dir="${CLAUDE_PROJECT_DIR:-$PWD}/.claude"
+  mkdir -p "$dir"
+  echo "$dir/tasks.jsonl"
+}
+
+_tasks_read() {
+  # Read JSONL, reduce to latest entry per id, return as JSON array
+  local file="$1"
+  python3 -c "
+import json, sys
+tasks = {}
+try:
+    with open(sys.argv[1]) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                obj = json.loads(line)
+                tasks[obj['id']] = obj
+except FileNotFoundError:
+    pass
+print(json.dumps(list(tasks.values()), ensure_ascii=False))
+" "$file"
+}
+
+cmd_task() {
+  local action="${1:?Usage: sv task <create|list|ready|update|start|close> ...}"
+  shift
+  local tasks_file
+  tasks_file=$(_tasks_file)
+
+  case "$action" in
+    create)
+      local subject="${1:?Usage: sv task create \"<subject>\" [--priority N] [--blocked-by id1,id2]}"
+      shift
+      local priority=2
+      local blocked_by="[]"
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --priority)   priority="$2"; shift 2 ;;
+          --blocked-by) blocked_by=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1].split(',')))" "$2"); shift 2 ;;
+          *) echo "Unknown option: $1" >&2; exit 1 ;;
+        esac
+      done
+      python3 -c "
+import json, uuid, datetime, sys
+task_id = 'sv-' + uuid.uuid4().hex[:6]
+now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
+obj = {
+    'id': task_id,
+    'created': now,
+    'updated': now,
+    'subject': sys.argv[1],
+    'status': 'pending',
+    'priority': int(sys.argv[2]),
+    'blocked_by': json.loads(sys.argv[3]),
+    'project': sys.argv[4],
+}
+with open(sys.argv[5], 'a') as f:
+    f.write(json.dumps(obj, ensure_ascii=False) + '\n')
+print(task_id)
+" "$subject" "$priority" "$blocked_by" "$PROJECT" "$tasks_file"
+      ;;
+
+    list)
+      local filter_status="active"
+      if [[ $# -gt 0 && "${1:-}" == "--status" ]]; then
+        filter_status="$2"; shift 2
+      fi
+      python3 -c "
+import json, sys
+tasks = {}
+try:
+    with open(sys.argv[1]) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                obj = json.loads(line)
+                tasks[obj['id']] = obj
+except FileNotFoundError:
+    pass
+filter_status = sys.argv[2]
+rows = sorted(tasks.values(), key=lambda t: (t.get('priority', 2), t.get('created', '')))
+for t in rows:
+    s = t.get('status', '')
+    if filter_status == 'all' or \
+       (filter_status == 'active' and s in ('pending', 'in_progress')) or \
+       filter_status == s:
+        blocked = ','.join(t.get('blocked_by', [])) or '-'
+        print(f\"{t['id']}  {s:<12}  p{t.get('priority',2)}  {t.get('subject','')}  [blocked_by: {blocked}]\")
+" "$tasks_file" "$filter_status"
+      ;;
+
+    ready)
+      python3 -c "
+import json, sys
+tasks = {}
+try:
+    with open(sys.argv[1]) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                obj = json.loads(line)
+                tasks[obj['id']] = obj
+except FileNotFoundError:
+    pass
+def is_completed(tid):
+    t = tasks.get(tid)
+    return t is not None and t.get('status') == 'completed'
+rows = sorted(tasks.values(), key=lambda t: (t.get('priority', 2), t.get('created', '')))
+for t in rows:
+    if t.get('status') != 'pending':
+        continue
+    blockers = t.get('blocked_by', [])
+    if all(is_completed(b) for b in blockers):
+        print(f\"{t['id']}  p{t.get('priority',2)}  {t.get('subject','')}\")
+" "$tasks_file"
+      ;;
+
+    update)
+      local task_id="${1:?Usage: sv task update <id> --status <new_status>}"
+      shift
+      local new_status=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --status) new_status="$2"; shift 2 ;;
+          *) echo "Unknown option: $1" >&2; exit 1 ;;
+        esac
+      done
+      [[ -z "$new_status" ]] && { echo "Usage: sv task update <id> --status <new_status>" >&2; exit 1; }
+      python3 -c "
+import json, sys, datetime
+task_id, new_status, tasks_file = sys.argv[1], sys.argv[2], sys.argv[3]
+tasks = {}
+try:
+    with open(tasks_file) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                obj = json.loads(line)
+                tasks[obj['id']] = obj
+except FileNotFoundError:
+    pass
+if task_id not in tasks:
+    print(f'Task not found: {task_id}', file=sys.stderr)
+    sys.exit(1)
+updated = dict(tasks[task_id])
+updated['status'] = new_status
+updated['updated'] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
+with open(tasks_file, 'a') as f:
+    f.write(json.dumps(updated, ensure_ascii=False) + '\n')
+print(f'Updated {task_id} -> {new_status}')
+" "$task_id" "$new_status" "$tasks_file"
+      ;;
+
+    start)
+      local task_id="${1:?Usage: sv task start <id>}"
+      cmd_task update "$task_id" --status in_progress
+      ;;
+
+    close)
+      local task_id="${1:?Usage: sv task close <id>}"
+      cmd_task update "$task_id" --status completed
+      ;;
+
+    *)
+      echo "Unknown task action: $action (use create|list|ready|update|start|close)" >&2; exit 1
+      ;;
+  esac
+}
+
+# ─── Dispatch ────────────────────────────────────────────────────────────────
+
+cmd="${1:?Usage: sv <pub|chat|read|retain|clear|request|respond|task> ...}"
+shift
+case "$cmd" in
+  pub)     cmd_pub "$@" ;;
+  chat)    cmd_chat "$@" ;;
+  read)    cmd_read "$@" ;;
+  retain)  cmd_retain "$@" ;;
+  clear)   cmd_clear "$@" ;;
+  request) cmd_request "$@" ;;
+  respond) cmd_respond "$@" ;;
+  task)    cmd_task "$@" ;;
+  *)       echo "Unknown command: $cmd" >&2; exit 1 ;;
+esac

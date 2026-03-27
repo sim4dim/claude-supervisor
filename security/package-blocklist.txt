@@ -1,0 +1,33 @@
+# Centurion package blocklist — known compromised or malicious packages
+# Last updated: 2026-03-24
+# Format: <ecosystem>/<package-name>  # notes
+# Lines starting with # are ignored
+
+# === Active supply chain compromises (2026) ===
+pip/litellm                    # 2026-03-24: TeamPCP — steals SSH keys, cloud creds, K8s backdoors
+pip/dydx-v4-client             # 2026-01-27: Wallet stealer + RAT
+
+# === Historical compromises ===
+pip/ctx                        # 2022: Steals env vars
+pip/jeIlyfish                  # Capital I typosquat — steals SSH keys
+pip/python-binance             # Fake binance package
+pip/python-mongo               # Typosquat of pymongo
+
+npm/event-stream               # 2018: Crypto-stealing injection
+npm/ua-parser-js               # 2021: Crypto miner
+npm/coa                        # 2021: Compromised
+npm/rc                         # 2021: Compromised
+npm/colors                     # 2022: Protestware — infinite loop
+npm/faker                      # 2022: Protestware — corrupted
+npm/node-ipc                   # 2022: Protestware — file deletion
+npm/es5-ext                    # 2024: Protestware backdoor
+
+# === Common typosquats ===
+pip/colourama                  # colorama typosquat
+pip/djanga                     # django typosquat
+pip/setuptool                  # setuptools typosquat
+pip/reqeusts                   # requests typosquat
+pip/requets                    # requests typosquat
+npm/loadsh                     # lodash typosquat
+npm/cross-env.js               # cross-env typosquat
+npm/electorn                   # electron typosquat

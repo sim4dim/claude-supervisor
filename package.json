@@ -1,0 +1,16 @@
+{
+  "name": "claude-supervisor-server",
+  "version": "2.0.0",
+  "type": "module",
+  "description": "Remote supervisor web server for Claude Code hooks — approve tool calls from your phone",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.18.0"
+  }
+}
