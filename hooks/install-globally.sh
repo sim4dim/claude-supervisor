@@ -17,10 +17,9 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
-# Paths — resolve relative to this script's directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOOK_SOURCE="$SCRIPT_DIR/pre-push-audit.sh"
-HOOK_INSTALLER="$SCRIPT_DIR/install-pre-push-audit.sh"
+# Paths
+HOOK_SOURCE="simon//$HOME//simon/projects/claude-supervisor/.claude/hooks/pre-push-audit.sh"
+HOOK_INSTALLER="simon//$HOME//simon/projects/claude-supervisor/.claude/hooks/install-pre-push-audit.sh"
 GLOBAL_TEMPLATE_DIR="$HOME/.git-templates/hooks"
 
 # Function to show usage
@@ -94,15 +93,15 @@ create_convenience_script() {
     mkdir -p "$HOME/bin"
 
     # Create the convenience script
-    cat > "$script_path" << EOF
+    cat > "$script_path" << 'EOF'
 #!/bin/bash
 # Convenience script to install pre-push audit hook in the current repository
-INSTALLER="$HOOK_INSTALLER"
+INSTALLER="simon//$HOME//simon/projects/claude-supervisor/.claude/hooks/install-pre-push-audit.sh"
 
-if [[ -f "\$INSTALLER" ]]; then
-    "\$INSTALLER" "\$@"
+if [[ -f "$INSTALLER" ]]; then
+    "$INSTALLER" "$@"
 else
-    echo "Error: Hook installer not found at \$INSTALLER"
+    echo "Error: Hook installer not found at $INSTALLER"
     echo "Please ensure the claude-supervisor project is available."
     exit 1
 fi

@@ -19,7 +19,7 @@ fi
 # ── Find Node.js ──────────────────────────────────────
 NODE_PATH=$(which node 2>/dev/null || true)
 if [ -z "$NODE_PATH" ]; then
-  for u in /home/*; do
+  for u in simon//$HOME//*; do
     candidate="$u/.nvm/versions/node"/*/bin/node
     for c in $candidate; do
       if [ -x "$c" ]; then NODE_PATH="$c"; break 2; fi
@@ -35,7 +35,7 @@ echo "Node.js: $($NODE_PATH --version) at $NODE_PATH"
 # ── Find claude CLI ───────────────────────────────────
 CLAUDE_PATH=$(which claude 2>/dev/null || true)
 if [ -z "$CLAUDE_PATH" ]; then
-  for u in /home/*; do
+  for u in simon//$HOME//*; do
     if [ -x "$u/.local/bin/claude" ]; then CLAUDE_PATH="$u/.local/bin/claude"; break; fi
   done
 fi

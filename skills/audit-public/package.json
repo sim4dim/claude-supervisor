@@ -1,0 +1,15 @@
+{
+  "name": "audit-public-skill",
+  "version": "1.0.0",
+  "description": "Audit repository for sensitive data before publishing publicly",
+  "main": "audit",
+  "bin": {
+    "audit-public": "./audit"
+  },
+  "dependencies": {
+    "glob": "^10.3.10"
+  },
+  "keywords": ["audit", "security", "privacy", "public-repo", "scan"],
+  "author": "Claude Supervisor",
+  "license": "MIT"
+}

@@ -7,8 +7,8 @@
 # Safe to re-run: updates supervisor-managed sections while preserving user edits.
 #
 # Examples:
-#   ./setup-project.sh /home/alice/projects/hvac 3847 "HVAC automation engineer. Stack: Home Assistant, pyscript, Keen vents, GW1000 weather station"
-#   ./setup-project.sh /home/alice/projects/av-remote 3847 "AV theater integration engineer. Stack: Python, Denon AVR, Sony Bravia, IR control"
+#   ./setup-project.sh simon//$HOME//simon/projects/hvac 3847 "HVAC automation engineer. Stack: Home Assistant, pyscript, Keen vents, GW1000 weather station"
+#   ./setup-project.sh simon//$HOME//simon/projects/av-remote 3847 "AVsimon//$HOME/ theater integration engineer. Stack: Python, Denon AVR, Sony Bravia, IR control"
 
 set -e
 
@@ -183,15 +183,10 @@ with open(settings_file, "w") as f:
 print(f"{action} {settings_file}")
 PYSCRIPT
 
-# Set reciprocal ACLs for cross-user access
-# Default ACLs ensure new files/dirs inherit the same permissions
-for user in $(stat -c '%U' "$PROJECT_DIR"); do
-  setfacl -R -m "u:$user:rwx" "$PROJECT_DIR" 2>/dev/null || \
-    sudo setfacl -R -m "u:$user:rwx" "$PROJECT_DIR" 2>/dev/null || true
-  setfacl -d -m "u:$user:rwx" "$PROJECT_DIR" 2>/dev/null || \
-    sudo setfacl -d -m "u:$user:rwx" "$PROJECT_DIR" 2>/dev/null || true
-done
-echo "Set cross-user ACLs on $PROJECT_DIR"
+# Optional: grant additional users read/write access to the project directory
+# Uncomment and repeat for each user that needs access:
+# setfacl -R -m u:USERNAME:rwx "$PROJECT_DIR" 2>/dev/null || sudo setfacl -R -m u:USERNAME:rwx "$PROJECT_DIR" 2>/dev/null || true
+# setfacl -d -m u:USERNAME:rwx "$PROJECT_DIR" 2>/dev/null || sudo setfacl -d -m u:USERNAME:rwx "$PROJECT_DIR" 2>/dev/null || true
 
 echo ""
 echo "Done! Project set up for supervisor on port $PORT"

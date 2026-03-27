@@ -3,8 +3,6 @@ node_modules/
 .env.*
 logs/
 drops/
+screenshots/
 .claude/
 *.log
-bin/refresh-token.sh
-bin/sync-elena-hooks.sh
-docs/launch-posts.md

@@ -152,7 +152,7 @@ const OLLAMA_MODEL = process.env.SUPERVISOR_OLLAMA_MODEL || 'mistral-nemo';
 const OLLAMA_TRUSTED_MODELS = (process.env.SUPERVISOR_OLLAMA_TRUSTED_MODELS || 'gpt-oss:20b,mistral-nemo:latest,mistral-nemo,gemma3:27b,phi4,phi4-mini,magistral,cogito:70b,llama3.3:70b,mistral-small3.1').split(',').map(s => s.trim());
 
 // ─── Peer Supervisors (for cross-instance doc sharing) ──────────────────────
-// Format: "name=url,name=url" e.g. "alice=http://192.168.x.x:3847,bob=http://192.168.x.x:3848"
+// Format: "name=url,name=url" e.g. "user1=http://localhost:3847,user2=http://localhost:3848"
 const SUPERVISOR_PEERS = (process.env.SUPERVISOR_PEERS || "").split(",").filter(Boolean).reduce((m, entry) => {
   const [name, url] = entry.split("=");
   if (name && url) m.set(name.trim(), url.trim());
