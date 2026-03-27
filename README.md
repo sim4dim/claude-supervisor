@@ -75,38 +75,26 @@ Works with any Claude plan (Free, Pro, Max) using Claude Code Hooks + a second C
 ## Architecture
 
 ```
-                          POST
-  Claude Code (worker)  -------->  Supervisor Server
-  +------------------+            +---------------------------+
-  | Hook script      |            | AI Evaluator (claude -p)  |
-  | (pre-tool-use.sh)|            | Scores call vs policy     |
-  |                  |            +-------------+-------------+
-  |  polls every 2s  |                          |
-  |                  |              +-----------+-----------+
-  |                  |              |                       |
-  |                  |        High confidence         Low confidence
-  |                  |         auto-resolve              escalate
-  |                  |              |                       |
-  |  <---decision----+----<--------+                       v
-  +------------------+                            +----------------+
-                                                  | Web UI         |
-                                                  | (browser)      |
-                                                  | Approvals      |
-                                                  | Terminals      |
-                                                  | Activity       |
-         +-----------------------------+          | Team chat      |
-         | MQTT Broker (local)         |          +-------+--------+
-         |                             |                  |
-         | sv CLI --> pub / chat /     |<-----WebSocket---+
-         |            request / retain |
-         |                             |
-         | Cross-session coordination, |
-         | coordinator dispatches      |
-         | agents across projects      |
-         +-----------------------------+
-
-  Evaluator fallback chain (when Ollama is the primary backend):
-  Ollama (primary) --> Claude Haiku Proxy :11436 (addons/ollama-proxy) --> auto-approve 0.5
+  Claude Code (worker)
+        |
+    hook intercepts
+        |  POST
+        v
+  +-Supervisor Server-----------+        +--Web UI (browser)--+
+  |                             |        |  Approvals         |
+  |  Evaluator:                 |  WS    |  Terminals         |
+  |  1. Ollama (local LLM)      +------->|  Activity log      |
+  |  2. Haiku proxy (:11436)    |        |  Team chat         |
+  |  3. auto-approve (0.5)      |        +--------------------+
+  |                             |
+  |  high conf --> decision ----+---> back to hook
+  |  low conf  --> escalate ----+---> to Web UI
+  +---------+-------------------+
+            |
+  +-MQTT Broker (mosquitto)-----+
+  |  sv CLI: pub/chat/request   |
+  |  Cross-session coordination |
+  +-----------------------------+
 ```
 
 ## Quick Start
