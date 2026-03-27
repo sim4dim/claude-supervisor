@@ -5,24 +5,32 @@ AI-powered supervision for Claude Code sessions. Evaluates tool call safety usin
 ## Architecture
 
 ```
-Claude Code (worker)                          MQTT Broker
-    │ tool call                               ▲         │
-    ▼                                         │         ▼
-Hook script ──POST──▶  Supervisor Server ◀── Web UI (browser)
-    │                    │           │                  │
-    │ polls every 2s     │      MQTT pub/sub       WebSocket
-    │               Tier 1: Ollama  │                  │
-    │               (local LLM)     ▼              ┌───┴────────┐
-    │                    │     Agent status         │ Approvals  │
-    │               if unavailable  Cross-project  │ Terminals  │
-    │                    │     Chat rooms           │ Activity   │
-    │               Tier 2: claude -p  Coordinator  │ Agents     │
-    │               (CLI fallback)                 └────────────┘
-    │                    │
-    │              High confidence
-    │              auto-resolve
-    │                    │ low confidence
-    ◀── decision ◀──────┘              human reviews + overrides
+                                              ┌──────────────┐
+Claude Code (worker)                          │ MQTT Broker  │
+    │ tool call                               │              │
+    ▼                                         │  Agent status│
+Hook script ──POST──▶ Supervisor Server ◀─────┤  Chat rooms  │
+    │                   │            │        │  Coordinator │
+    │  polls            │        pub/sub      │  Discoveries │
+    │  every 2s         │            │        └──────────────┘
+    │                   │            │
+    │            ┌──────┴──────┐     │        ┌──────────────┐
+    │            │  Evaluation │     └───────▶│  Web UI      │
+    │            │             │   WebSocket  │              │
+    │            │  Tier 1:    │              │  Approvals   │
+    │            │  Ollama     │              │  Terminals   │
+    │            │  (local LLM)│              │  Activity    │
+    │            │      │      │              │  Agent panel │
+    │            │  if unavail.│              └──────────────┘
+    │            │      ▼      │
+    │            │  Tier 2:    │
+    │            │  claude -p  │
+    │            │  (fallback) │
+    │            └──────┬──────┘
+    │                   │
+    │             auto-resolve (high confidence)
+    │                   │ low confidence
+    ◀── decision ◀──────┘          human reviews + overrides
 ```
 
 **Multi-tier evaluation**: Tier 1 is Ollama (fast, free, works offline). Tier 2 is `claude -p` (used when Ollama is down or for a second opinion on hard cases). An optional `ollama-proxy` addon can sit in front and route between local models and the Claude API dynamically.
