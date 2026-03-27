@@ -40,11 +40,27 @@ export SV_TASK_ID="<kebab-case-description>"  # e.g., "fix-auth-bug"
 sv pub status started "<what you are doing>"
 ```
 
-During work — publish progress and discoveries:
+During work — publish progress:
 ```bash
 sv pub progress 50 "Found 3 affected files, patching now"
-sv pub discovery "Auth tokens expire after 1h, not 24h as documented"
 ```
+
+Before completing — publish discoveries:
+
+**Researcher agents MUST publish at least one discovery before completing.** Implementer and reviewer agents SHOULD publish if behavior differs from documented expectations. A discovery is any finding the main agent could not have inferred from the task prompt alone — including negative findings.
+
+```bash
+# Positive finding
+sv pub discovery "Auth tokens expire after 1h, not 24h as documented"
+
+# Behavioral deviation
+sv pub discovery "getUserById returns null on missing user, not an exception as the docstring claims"
+
+# Negative finding (explicitly confirming no issues)
+sv pub discovery "No unexpected findings — rate limits, token refresh, and session handling all match documentation"
+```
+
+Discovery signals are retained for cross-task and cross-project pattern analysis. Publishing them consistently enables the supervisor to detect recurring issues across your projects.
 
 At the **end**:
 ```bash
