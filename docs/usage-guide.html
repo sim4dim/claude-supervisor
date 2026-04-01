@@ -267,6 +267,9 @@
   <a href="#security-policy">Security Policy</a>
   <a href="#delegation">Delegation</a>
   <a href="#session-continuity">Session Continuity</a>
+  <a href="#defer-resume">Defer / Resume</a>
+  <a href="#api-proxy">API Proxy</a>
+  <a href="#dynamic-approvals">Dynamic Approvals</a>
   <a href="#auto-answer">Auto-Answer</a>
   <div class="nav-section">Communication</div>
   <a href="#chat-rooms">Chat Rooms</a>
@@ -318,7 +321,7 @@
     </tr>
     <tr>
       <td>debate</td>
-      <td>Multi-agent structured debate: PRO agent vs CON agent, gap finder, active moderator</td>
+      <td>Three-agent structured debate: PRO agent vs CON agent, active moderator</td>
       <td>Unclear tradeoffs, technology choices, conflicting requirements</td>
     </tr>
   </table>
@@ -638,8 +641,7 @@ sv respond &lt;request-id&gt; <span class="str">"Returns null at users.js:45"</s
 
   <!-- ── EMAIL NOTIFICATIONS ── -->
   <h2 id="email-notify">Email Notifications</h2>
-  <p><strong>Note: this feature is not yet implemented.</strong> The configuration below is accepted but no email is sent in the current release.</p>
-  <p>When a Claude session ends — not on every turn, only on real stops like <code>max_turns</code>, user interrupt, or task completion — the supervisor will send you an email with the project name, stop reason, and a summary of git state (uncommitted changes and recent commits).</p>
+  <p>When a Claude session ends — not on every turn, only on real stops like <code>max_turns</code>, user interrupt, or task completion — the supervisor can send you an email with the project name, stop reason, and a summary of git state (uncommitted changes and recent commits).</p>
 
   <h3>How to enable</h3>
 
@@ -662,7 +664,7 @@ rm .claude/notify-email
 <span class="comment"># Or unset the environment variable:</span>
 <span class="kw">unset</span> SUPERVISOR_NOTIFY_EMAIL</code></pre>
 
-  <div class="tip"><strong>Note:</strong> Email notifications are not yet implemented. The configuration above is accepted but no email is sent in the current release.</div>
+  <div class="tip"><strong>Tip:</strong> Enable email notifications before kicking off long background work, then close your laptop. You'll get an email when it's done.</div>
 
 
   <!-- ── SECURITY POLICY ── -->
@@ -694,9 +696,47 @@ rm .claude/notify-email
   </table>
 
   <h3>Learned approvals</h3>
-  <p><code>dynamic-approvals.sh</code> is auto-generated from eval history. Commands that are approved 3 or more times with 95%+ confidence are promoted to the fast-path auto-approve list, skipping the AI evaluator entirely on future calls.</p>
+  <p><code>hooks/dynamic-approvals.sh</code> is auto-generated from eval history. Commands that meet the promotion thresholds are added to the fast-path auto-approve list, bypassing the AI evaluator entirely on future calls. See the <a href="#dynamic-approvals" style="color: var(--accent);">Dynamic Approvals</a> section for details.</p>
 
   <div class="tip"><strong>Tip:</strong> Add a comment to <code>supervisor-policy.md</code> explaining why a rule exists. The AI evaluator reads the full file for context when making close calls.</div>
+
+
+  <!-- ── DYNAMIC APPROVALS ── -->
+  <h2 id="dynamic-approvals">Dynamic Approvals</h2>
+  <p>The supervisor learns which commands are safe from its own eval history. A housekeeping script analyzes past evaluations and promotes frequently-approved patterns to a generated fast-path file, eliminating AI evaluator overhead for routine commands.</p>
+
+  <h3>How it works</h3>
+  <ol style="padding-left:20px;margin:10px 0">
+    <li>Every AI evaluation is logged to <code>logs/eval-history.jsonl</code>.</li>
+    <li><code>scripts/eval-housekeeping.js</code> runs twice daily, analyzing the log for patterns that meet the promotion thresholds.</li>
+    <li>Promoted patterns are written to <code>hooks/dynamic-approvals.sh</code>.</li>
+    <li>The pre-tool-use hook sources this file — matching commands are auto-approved without calling the AI evaluator.</li>
+  </ol>
+
+  <h3>Promotion thresholds</h3>
+  <table>
+    <tr>
+      <th>Threshold</th>
+      <th>Value</th>
+    </tr>
+    <tr>
+      <td>Min occurrences</td>
+      <td>3</td>
+    </tr>
+    <tr>
+      <td>Min approval rate</td>
+      <td>90%</td>
+    </tr>
+    <tr>
+      <td>Min avg confidence</td>
+      <td>85%</td>
+    </tr>
+  </table>
+
+  <h3>Running manually</h3>
+  <pre><code>node scripts/eval-housekeeping.js</code></pre>
+
+  <div class="tip"><strong>Tip:</strong> Run the housekeeping script manually after a period of intensive agent work to fast-track patterns you've been approving repeatedly. The generated <code>dynamic-approvals.sh</code> is checked into version control so learned rules persist across server restarts.</div>
 
 
   <!-- ── DELEGATION ENFORCEMENT ── -->
@@ -772,6 +812,74 @@ rm .claude/notify-email
 
   <h3>Context tracking</h3>
   <p>The supervisor parses PTY output to extract context window percentage and saves it to <code>.claude/context-percent.txt</code>. Predictive warnings are injected at 50%, 65%, and 80% to prompt proactive delegation before limits are hit.</p>
+
+
+  <!-- ── DEFER / RESUME ── -->
+  <h2 id="defer-resume">Defer / Resume</h2>
+  <p>Headless Claude sessions can defer approval decisions to the supervisor instead of blocking on human input. This enables cron-triggered agents, background tasks, and CI pipelines to pause safely and resume after a decision is made.</p>
+
+  <h3>How it works</h3>
+  <ol style="padding-left:20px;margin:10px 0">
+    <li>A headless session encounters a tool call requiring approval and calls <code>POST /api/hook/defer</code> with <code>{ approval_id, session_id }</code>.</li>
+    <li>The supervisor stores the mapping and displays the pending approval in the dashboard.</li>
+    <li>A human (or the AI evaluator) resolves the approval.</li>
+    <li>The server spawns <code>claude -p --resume &lt;sessionId&gt;</code> in the correct project directory.</li>
+    <li>The resumed session continues exactly where it left off.</li>
+  </ol>
+
+  <h3>Use cases</h3>
+  <ul>
+    <li>Cron-triggered agents that need a human approval checkpoint before destructive operations</li>
+    <li>Background tasks spawned from CI pipelines that may hit policy-gated commands</li>
+    <li>Long-running research agents that pause for confirmation before making changes</li>
+  </ul>
+
+  <div class="tip"><strong>Tip:</strong> Defer/Resume is the correct pattern for any scheduled or unattended agent work that still needs occasional human sign-off — it avoids polling loops and doesn't require the human to be present at the moment the decision is needed.</div>
+
+
+  <!-- ── API PROXY ── -->
+  <h2 id="api-proxy">API Proxy</h2>
+  <p>The supervisor includes a transparent proxy for Anthropic API calls. Set <code>ANTHROPIC_BASE_URL</code> to route all Claude API traffic through the supervisor so it can track per-session call counts.</p>
+
+  <h3>Setup</h3>
+  <pre><code><span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="str">http://localhost:3847</span>  <span class="comment"># routes API calls through supervisor</span></code></pre>
+
+  <h3>What it does</h3>
+  <ul>
+    <li>Transparently proxies all <code>/v1/*</code> requests to <code>https://api.anthropic.com</code></li>
+    <li>Extracts the <code>X-Claude-Code-Session-Id</code> header for per-session tracking</li>
+    <li>Tracks call counts per session — visible in <code>/api/state</code> under <code>apiProxy.sessionCalls</code></li>
+    <li>Streams responses with no content modification</li>
+  </ul>
+
+  <table>
+    <tr>
+      <th>Detail</th>
+      <th>Value</th>
+    </tr>
+    <tr>
+      <td>Proxy port</td>
+      <td><code>3847</code> (same port as supervisor)</td>
+    </tr>
+    <tr>
+      <td>Proxied path</td>
+      <td><code>/v1/*</code> → <code>https://api.anthropic.com/v1/*</code></td>
+    </tr>
+    <tr>
+      <td>Session tracking header</td>
+      <td><code>X-Claude-Code-Session-Id</code></td>
+    </tr>
+    <tr>
+      <td>State key</td>
+      <td><code>apiProxy.sessionCalls</code> in <code>/api/state</code></td>
+    </tr>
+    <tr>
+      <td>Min Claude Code version</td>
+      <td>v2.1.87+ (required for session ID header)</td>
+    </tr>
+  </table>
+
+  <div class="tip"><strong>Tip:</strong> Per-session call counts let you see which agent tasks are making the most API calls. Useful for identifying runaway agents or optimizing expensive workflows.</div>
 
 
   <!-- ── AUTO-ANSWER ── -->
@@ -855,7 +963,7 @@ rm .claude/notify-email
         <tr><td>review</td><td>1 (read-only)</td><td>Code review, approach critique</td></tr>
         <tr><td>action</td><td>1 (read-write)</td><td>Delegated implementation</td></tr>
         <tr><td>plan / feasibility</td><td>2 (planner + Moltke)</td><td>Architecture, irreversible decisions</td></tr>
-        <tr><td>debate</td><td>4+ (debaters + gap finder + moderator)</td><td>Unclear tradeoffs, contested choices</td></tr>
+        <tr><td>debate</td><td>3 (PRO + CON + moderator)</td><td>Unclear tradeoffs, contested choices</td></tr>
       </table>
     </div>
   </details>
