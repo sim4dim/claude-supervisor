@@ -41,6 +41,20 @@ auto_approve() {
     exit 0
 }
 
+# Detect headless mode: true when running in a non-interactive / -p session.
+is_headless_mode() {
+    [[ "${CLAUDE_DEFER_APPROVALS:-}" == "1" ]] && return 0
+    [[ "${CLAUDE_IS_SUBAGENT:-}" == "1" ]] && return 0
+    [ ! -t 0 ] && return 0
+    return 1
+}
+
+# Return the "defer" permission decision — suspends the headless session.
+defer_approval() {
+    jq -n '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"defer"}}'
+    exit 0
+}
+
 # ─── Auto-approve rules (never hit the server) ──────────────────────────────
 
 # Read-only tools: always safe (read storm tracked server-side via PostToolUse)
@@ -158,6 +172,22 @@ if [[ "$TOOL_NAME" == "Bash" ]]; then
             hookEventName: "PreToolUse",
             permissionDecision: "deny",
             permissionDecisionReason: $reason
+          }
+        }'
+        exit 0
+    fi
+
+    # ── Input rewrite: strip --no-verify from git commit ─────────────────────
+    # Allow the commit but remove the flag that would skip pre-commit hooks.
+    # This uses the v2.1.85+ combined updatedInput + permissionDecision:"allow" response.
+    if echo "$CMD_ONLY" | grep -qE '^git\s+commit\b' && echo "$CMD_ONLY" | grep -qE '(--no-verify|-n)\b'; then
+        REWRITTEN=$(echo "$COMMAND" | sed -E 's/--no-verify\b//g; s/\bgit commit\s+-n\b/git commit/g; s/\s+/ /g; s/^\s+|\s+$//g')
+        jq -n --arg cmd "$REWRITTEN" '{
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "allow",
+            permissionDecisionReason: "Approved: --no-verify stripped to preserve hook enforcement",
+            updatedInput: {command: $cmd}
           }
         }'
         exit 0
@@ -537,6 +567,17 @@ APPROVAL_ID=$(echo "$RESPONSE" | jq -r '.id // ""')
 if [[ -z "$APPROVAL_ID" || "$APPROVAL_ID" == "null" ]]; then
     # No ID returned, fall through
     exit 0
+fi
+
+# ─── Defer in headless mode (Claude Code v2.1.85+) ──────────────────────────
+if is_headless_mode && [[ -n "$APPROVAL_ID" && "$APPROVAL_ID" != "null" ]]; then
+    curl -s --max-time 2 \
+        -X POST "${SUPERVISOR_URL}/api/hook/defer" \
+        -H "Content-Type: application/json" \
+        -H "$(_sv_auth_header)" \
+        -d "$(jq -n --arg id "$APPROVAL_ID" --arg session "$SESSION_ID" \
+            '{approval_id: ($id|tonumber), session_id: $session}')" >/dev/null 2>&1 || true
+    defer_approval
 fi
 
 # Poll for decision (the web UI user will approve/deny via WebSocket)
