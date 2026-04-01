@@ -216,6 +216,7 @@ function serializeCoordinatorEntry(id, entry) {
 
 const sessions = new Map();
 const wsClients = new Set();
+const deferredSessions = new Map(); // approval_id -> session_id for defer/resume flow
 
 // ─── Delegation Enforcement ──────────────────────────────────────────────────
 const delegationTrackers = new Map(); // session_id -> tracker (kept for logging/hints)
@@ -1249,6 +1250,32 @@ function analyzeEvalPatterns() {
   }
 }
 
+// Resume a deferred headless session after an approval is resolved.
+function resumeDeferredSession(approvalId, approval) {
+  const sessionId = deferredSessions.get(approvalId);
+  if (!sessionId) return;
+  deferredSessions.delete(approvalId);
+  const session = sessions.get(sessionId);
+  // sessions Map only stores {project, lastSeen, approvalCount} — no projectDir.
+  // Look it up from the terminals Map instead.
+  let projectDir = null;
+  for (const [, t] of terminals) {
+    if (t.claudeSessionId === sessionId || t.project === session?.project) {
+      projectDir = t.projectDir;
+      break;
+    }
+  }
+  const cwd = projectDir || process.cwd();
+  log("info", `Resuming deferred session ${sessionId} for approval #${approvalId}`);
+  const child = require("child_process").spawn("claude", ["-p", "--resume", sessionId], {
+    cwd, stdio: "ignore", detached: true,
+  });
+  child.on("error", (err) => {
+    log("warn", `Failed to resume session ${sessionId}: ${err.message}`);
+  });
+  child.unref();
+}
+
 async function triggerAIEvaluation(approvalId) {
   const approval = pendingApprovals.get(approvalId);
   if (!approval || approval.status !== "pending") return;
@@ -1317,6 +1344,7 @@ async function triggerAIEvaluation(approvalId) {
 
       if (result.approved) evalStats.aiApproved++; else evalStats.aiDenied++;
       broadcast({ type: "approval_resolved", id: approvalId, status: current.status, decidedBy: "ai", evaluatedBy: result.model, confidence: result.confidence });
+      resumeDeferredSession(approvalId, current);
       broadcastEvalStats();
     } else {
       const reason = SUPERVISOR_MODE === "assisted"
@@ -1664,6 +1692,16 @@ app.get("/api/hook/decision/:id", (req, res) => {
     reason: approval.reason || "",
     decidedBy: approval.decidedBy || null,
   });
+});
+
+app.post("/api/hook/defer", (req, res) => {
+  const { approval_id, session_id } = req.body;
+  if (!approval_id || !session_id) return res.status(400).json({ error: "approval_id and session_id required" });
+  const id = parseInt(approval_id);
+  if (isNaN(id)) return res.status(400).json({ error: "approval_id must be numeric" });
+  deferredSessions.set(id, session_id);
+  log("info", `Approval #${id} deferred by session ${session_id}`);
+  res.json({ ok: true });
 });
 
 app.post("/api/hook/log", (req, res) => {
@@ -2015,6 +2053,7 @@ app.post("/api/respond/:id", (req, res) => {
   }
 
   broadcast({ type: "approval_resolved", id, status: approval.status, decidedBy: "human" });
+  resumeDeferredSession(id, approval);
   broadcastEvalStats();
 
   if (pendingApprovals.size > 100) {
@@ -2058,6 +2097,7 @@ app.get("/api/state", (req, res) => {
     coordinatorInstance: SV_INSTANCE,
     usage: { sessions: Object.fromEntries(sessionUsage), aggregate: aggregateUsage },
     globalRateLimits,
+    apiProxy: { sessionCalls: Object.fromEntries(apiCallsBySession) },
   });
 });
 
@@ -2131,7 +2171,7 @@ function createDtachSession(project, projectDir, cols, rows, sessionId) {
   }
   const child = spawn("dtach", args, {
     cwd: projectDir,
-    env: { ...process.env, TERM: "xterm-256color", CLAUDECODE: "", CLAUDE_CODE_TASK_LIST_ID: `task-${project}` },
+    env: { ...process.env, TERM: "xterm-256color", CLAUDECODE: "", CLAUDE_CODE_TASK_LIST_ID: `task-${project}`, CLAUDE_CODE_NO_FLICKER: "1", MCP_CONNECTION_NONBLOCKING: "true" },
     stdio: "ignore",
     detached: true,
   });
@@ -3014,6 +3054,85 @@ app.post("/api/version/update", async (req, res) => {
 app.get("/", (req, res) => res.type("html").send(WEB_UI));
 app.get("/docs/usage-guide.html", (req, res) => res.type("html").send(USAGE_GUIDE));
 
+// ── Anthropic API Proxy ─────────────────────────────────────────────────────
+// When ANTHROPIC_BASE_URL=http://localhost:3847 is set in a Claude Code session,
+// all API calls are routed through here. This lets the supervisor extract the
+// X-Claude-Code-Session-Id header sent by Claude Code v2.1.87+, which allows
+// correlating API usage (token consumption, model calls) to specific sessions
+// without parsing request bodies.
+//
+// Per-session API call counts are tracked in apiCallsBySession and broadcast
+// to the web UI so the dashboard can show API activity per session.
+
+const apiCallsBySession = new Map(); // claudeSessionId -> { calls, tokens, lastSeen }
+
+app.use("/v1", express.raw({ type: "*/*", limit: "50mb" }), async (req, res) => {
+  const claudeSessionId = req.headers["x-claude-code-session-id"] || null;
+  const targetUrl = `https://api.anthropic.com/v1${req.path}`;
+
+  // Track per-session API call stats
+  if (claudeSessionId) {
+    const entry = apiCallsBySession.get(claudeSessionId) || { calls: 0, lastSeen: null };
+    entry.calls += 1;
+    entry.lastSeen = new Date().toISOString();
+    apiCallsBySession.set(claudeSessionId, entry);
+
+    log("info", `API proxy: ${req.method} /v1${req.path} session=${claudeSessionId}`, {
+      sessionId: claudeSessionId,
+      path: `/v1${req.path}`,
+      method: req.method,
+    });
+  }
+
+  // Forward headers — strip hop-by-hop and host headers, keep auth/content headers
+  const forwardHeaders = {};
+  const skipHeaders = new Set(["host", "connection", "transfer-encoding", "keep-alive", "upgrade", "te", "trailers"]);
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (!skipHeaders.has(key.toLowerCase())) {
+      forwardHeaders[key] = value;
+    }
+  }
+
+  try {
+    const upstream = await fetch(targetUrl, {
+      method: req.method,
+      headers: forwardHeaders,
+      body: req.method !== "GET" && req.method !== "HEAD" && req.body?.length ? req.body : undefined,
+      // duplex required for streaming request bodies in Node 18+
+      duplex: "half",
+    });
+
+    // Copy response headers back (skip hop-by-hop)
+    for (const [key, value] of upstream.headers.entries()) {
+      if (!skipHeaders.has(key.toLowerCase())) {
+        res.setHeader(key, value);
+      }
+    }
+    res.status(upstream.status);
+
+    // Stream the response body back to the client
+    if (upstream.body) {
+      const reader = upstream.body.getReader();
+      const pump = async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) { res.end(); break; }
+          res.write(Buffer.from(value));
+        }
+      };
+      pump().catch((err) => {
+        log("warn", `API proxy stream error: ${err.message}`);
+        res.end();
+      });
+    } else {
+      res.end();
+    }
+  } catch (err) {
+    log("warn", `API proxy fetch error: ${err.message}`, { path: `/v1${req.path}` });
+    res.status(502).json({ error: "proxy_error", message: err.message });
+  }
+});
+
 // ── WebSocket ───────────────────────────────────────────────────────────────
 
 wss.on("connection", (ws) => {
@@ -3083,6 +3202,7 @@ wss.on("connection", (ws) => {
             `[${approval.project}] ${wasAi ? "Human OVERRODE AI" : "#" + msg.id + " " + approval.status}: ${approval.tool}`,
             { project: approval.project });
           broadcast({ type: "approval_resolved", id: msg.id, status: approval.status, decidedBy: "human" });
+          resumeDeferredSession(msg.id, approval);
           broadcastEvalStats();
           break;
         }
@@ -3434,6 +3554,7 @@ Post your key findings to this chat room as you work. Use: sv chat post ${chatRo
   env.CLAUDE_PROJECT_DIR = projectDir;
   env.SV_PROJECT = basename(projectDir);
   env.CLAUDE_CODE_TASK_LIST_ID = `task-${basename(projectDir)}`;
+  env.MCP_CONNECTION_NONBLOCKING = "true";
   // Merge any env vars from the request payload (overrides defaults above)
   if (request.env && typeof request.env === "object") {
     Object.assign(env, request.env);
@@ -3524,6 +3645,7 @@ function dispatchMoltkeRequest(requestId, request, projectDir) {
   env.CLAUDE_PROJECT_DIR = projectDir;
   env.SV_PROJECT = basename(projectDir);
   env.CLAUDE_CODE_TASK_LIST_ID = `task-${basename(projectDir)}`;
+  env.MCP_CONNECTION_NONBLOCKING = "true";
 
   const moltkeRoom = `feasibility-${requestId.substring(0, 8)}`;
 
@@ -3734,6 +3856,7 @@ function dispatchDebate(requestId, request, projectDir) {
   env.CLAUDE_PROJECT_DIR = projectDir;
   env.SV_PROJECT = basename(projectDir);
   env.CLAUDE_CODE_TASK_LIST_ID = `task-${basename(projectDir)}`;
+  env.MCP_CONNECTION_NONBLOCKING = "true";
 
   const debateRoom = `debate-${requestId.substring(0, 8)}`;
   const defaultTimeout = 900;
