@@ -193,11 +193,45 @@ The supervisor spawns and manages Claude Code sessions via PTY. Launch, view, an
 | `dynamic-approvals.sh` | — | Dynamic rule evaluation for approval decisions. |
 | `file-changed.sh` | — | Triggers on file changes for live reload or logging. |
 
+### Defer / Resume
+
+When a Claude Code session runs in headless mode (e.g. spawned by cron or another agent), it can defer approval decisions to the supervisor and resume after they're resolved.
+
+**How it works:**
+1. A hook calls `POST /api/hook/defer` with `{ approval_id, session_id }` to register that the session is waiting
+2. The supervisor stores the mapping and shows the approval in the dashboard
+3. When a human or AI resolves the approval, the server calls `resumeDeferredSession` which spawns `claude -p --resume <sessionId>` in the correct project directory
+4. The resumed session continues from where it left off
+
+**API:**
+| Endpoint | Method | Body | Description |
+|----------|--------|------|-------------|
+| `/api/hook/defer` | POST | `{ approval_id: number, session_id: string }` | Register a deferred session waiting for approval |
+
 ### Auto-approve rules (never hit the server)
 
 - **Read-only tools**: `Read`, `Glob`, `Grep`, `LS`, `Task`
 - **File edits**: Approved unless targeting `.env`, `secrets`, `.git/`, `/etc/`, `node_modules/`
 - **Safe bash**: `ls`, `cat`, `git status`, `npm test`, `node`, `python`, etc.
+
+### Dynamic Approvals (Learned Patterns)
+
+The supervisor automatically learns which commands are safe to auto-approve based on eval history.
+
+**How it works:**
+1. `scripts/eval-housekeeping.js` runs periodically (2x/day) and analyzes `logs/eval-history.jsonl`
+2. Commands that have been approved 3+ times with ≥90% approval rate and ≥85% average confidence are promoted to auto-approve patterns
+3. Patterns are written to `hooks/dynamic-approvals.sh` and `.claude/hooks/dynamic-approvals.sh`
+4. The pre-tool-use hook sources this file, so learned patterns bypass the AI evaluator on future calls
+
+**Thresholds:**
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Min occurrences | 3 | Command must be seen at least 3 times |
+| Min approval rate | 90% | Must be approved ≥90% of the time |
+| Min avg confidence | 85% | Average AI confidence must be ≥85% |
+
+Run manually: `node scripts/eval-housekeeping.js`
 
 ### Auto-deny rules (in hooks)
 
@@ -320,6 +354,21 @@ Skills are slash commands available inside Claude sessions supervised by this se
 |----------|---------|-------------|
 | `SUPERVISOR_PASSWORD` | _(unset)_ | Dashboard password. Enables login page when set. |
 | `SUPERVISOR_HOOK_TOKEN` | _(random)_ | Bearer token for hook authentication. Auto-generated if unset. |
+
+### API Proxy
+
+The supervisor can act as a transparent proxy for Anthropic API calls. Set `ANTHROPIC_BASE_URL=http://localhost:3847` in a Claude Code session to route all API traffic through the supervisor.
+
+**What it does:**
+- Forwards all `/v1/*` requests to `https://api.anthropic.com`
+- Extracts `X-Claude-Code-Session-Id` header to correlate API calls with sessions
+- Tracks per-session call counts (visible in `/api/state` under `apiProxy.sessionCalls`)
+- Streams responses back transparently — no modification of request/response content
+
+**Environment variable:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_BASE_URL` | _(unset)_ | Set to `http://localhost:<port>` in Claude Code sessions to route API calls through supervisor |
 
 ### MQTT
 
