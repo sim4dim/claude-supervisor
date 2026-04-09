@@ -46,6 +46,8 @@ Hook script ──POST──▶ Supervisor Server ◀─────┤  Chat ro
 - **MQTT integration** for agent status, cross-project chat, and coordinator requests
 - **Graceful fallback** when server is down — hooks pass through and Claude works normally
 - **Password auth** to protect the dashboard on shared or remote hosts
+- **PII scrubbing** removes customer IPs, MACs, emails, SSNs, names, and more before data reaches Anthropic — via MCP tools, API proxy, or both. Structured mode preserves subnet math for network engineering
+- **Pensive knowledge extraction** — `/pensive-import` captures SSH patterns, CLI commands, and operational knowledge from project docs for cross-session reuse
 
 ## Quick Start
 
@@ -108,6 +110,10 @@ Click **+ New** in the terminal panel to launch a Claude session for any project
 
 Or click **Remove Hooks** in the terminal statusbar. This removes hook scripts and the hooks config from `.claude/settings.json` while preserving any other settings.
 
+### Optional: Enable PII scrubbing
+
+Open the dashboard, expand the **PII Scrubbing** panel, toggle it on, select a scrub path (MCP or API proxy), and save. The MCP server is auto-deployed to all projects. See the [PII Scrubbing](#pii-scrubbing) section for details.
+
 ## How It Works
 
 1. **Claude Code Hooks** intercept tool calls via `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Notification`, `Stop`, and other events
@@ -117,6 +123,40 @@ Or click **Remove Hooks** in the terminal statusbar. This removes hook scripts a
 5. **High-confidence decisions** (above threshold) are auto-approved or auto-denied instantly
 6. **Low-confidence decisions** are escalated to the web UI for human review, with the AI's recommendation shown
 7. Activity is logged in real-time so you can monitor all sessions from any browser
+
+## Deployment Modes
+
+The supervisor works with both Claude Code subscription plans and API key access. The core supervision features (approval, evaluation, dashboard) work identically in both modes. The difference is in how PII scrubbing and some eval features are routed.
+
+### Max / Pro Plan (subscription)
+
+You're running Claude Code with your Anthropic subscription. Claude Code talks directly to Anthropic — you don't control the API calls.
+
+- **Tool evaluation**: hooks intercept tool calls, Ollama evaluates locally, `claude -p` as Tier 2 fallback
+- **PII scrubbing**: use the **MCP path** — an MCP server wraps Read/Bash/Grep/Write/Edit with bidirectional scrub/restore. Claude never sees real PII in tool results, and writes are rehydrated before hitting disk
+- **Web terminals**: full support — launch and manage Claude sessions from the dashboard
+- **API proxy** (`ANTHROPIC_BASE_URL`): can optionally route traffic through the supervisor for token tracking, but on Max plan the CLI manages auth internally
+
+This is the recommended setup for most users. Set PII scrub path to **MCP** in the dashboard.
+
+### API Key Deployment
+
+You have an Anthropic API key and want all traffic to flow through the supervisor's `/v1` proxy.
+
+- **Tool evaluation**: same as above
+- **PII scrubbing**: use the **API proxy path** — the supervisor intercepts `/v1/messages` request bodies and scrubs PII before forwarding to `api.anthropic.com`. Native tools work normally; only what leaves your machine is filtered
+- **Web terminals**: full support
+- **Setup**: set `ANTHROPIC_BASE_URL=http://localhost:3847` in each Claude Code session so API calls route through the supervisor
+
+This is the recommended setup for corporate deployments where you need to guarantee no PII reaches Anthropic. Set PII scrub path to **API** (or **Both** for belt-and-suspenders) in the dashboard.
+
+### Choosing a PII scrub path
+
+| Path | How it works | Best for |
+|------|-------------|----------|
+| **MCP** | Wraps tools — Claude reads/writes through sanitizing proxy | Max/Pro plan, interactive sessions |
+| **API** | Scrubs API request bodies in the `/v1` proxy | API key deployments, corporate compliance |
+| **Both** | MCP + API active simultaneously | Maximum assurance — defense in depth |
 
 ## Web Dashboard
 
@@ -290,6 +330,77 @@ When enabled:
 - Hooks authenticate via bearer token stored in `$HOME/.claude/.supervisor-hook-token` (written automatically on startup).
 - Use `SUPERVISOR_HOOK_TOKEN` to set a fixed token (useful for multi-user setups where hooks are configured before server restarts).
 
+## PII Scrubbing
+
+The supervisor can scrub personally identifiable information from all traffic before it reaches Anthropic — customer IPs, MAC addresses, email addresses, hostnames, phone numbers, SSNs, and names are replaced with synthetic tokens or valid fake values. Scrubbing operates at two interception points and two substitution modes.
+
+### Scrubbing Paths
+
+| Path | How it works | When to use |
+|------|-------------|-------------|
+| **MCP** | Blocks Claude's native Read/Bash/Grep/Write/Edit tools. Routes all file and shell access through `mcp__pii__*` equivalents that scrub output before returning it to Claude and restore original values in any writes. | Max plan sessions (MCP is available) |
+| **API Proxy** | Intercepts `/v1/messages` request bodies on the way to Anthropic and scrubs the conversation content in-place. Claude's native tools still work; only what is sent to Anthropic is filtered. | API key deployments with `ANTHROPIC_BASE_URL` set |
+| **Both** | MCP path for file/shell access + API proxy for outbound messages. Maximum coverage. | High-sensitivity projects |
+
+### Substitution Modes
+
+| Mode | Example | Preserves |
+|------|---------|-----------|
+| **Token** | `192.168.1.50` → `[IPv4-001]` | Stable cross-session reference — the same real value always maps to the same token |
+| **Structured** | `192.168.1.50` → `10.42.17.82` | Per-octet substitution keeps subnet math intact (hosts in the same /24 stay in the same fake /24). MAC OUI grouping is preserved. Zero MACs (`00:00:00:00:00:00`) remain zero. |
+
+### PII Types
+
+Eight types can be toggled individually per project:
+
+| Type | Example real value | Example token |
+|------|--------------------|--------------|
+| IPv4 | `10.0.1.50` | `[IPv4-001]` |
+| IPv6 | `fe80::1` | `[IPv6-001]` |
+| MAC | `aa:bb:cc:dd:ee:ff` | `[MAC-001]` |
+| Email | `alice@example.com` | `[EMAIL-001]` |
+| Hostname | `db-prod-01.internal` | `[HOST-001]` |
+| Phone | `+1-555-867-5309` | `[PHONE-001]` |
+| SSN | `123-45-6789` | `[SSN-001]` |
+| Name | `John Smith` | `[NAME-001]` |
+
+### Configuration
+
+Enable PII scrubbing from the dashboard — no restart required:
+
+1. Open the **PII Scrubbing** panel
+2. Toggle **Enable** for each project that needs scrubbing
+3. Select the path (MCP / API / Both)
+4. Select the mode (Token / Structured)
+5. Enable or disable individual PII types as needed
+
+Each project gets its own lookup table and session ID, so token assignments (`[IPv4-001]`, etc.) are isolated per project. The `pii_lookup` MCP tool exposes the current table for inspection.
+
+### Quick setup
+
+```bash
+# Enable global default in the dashboard, then override per project as needed.
+# If global scrubbing is off, add the project in the dashboard to enable it individually.
+```
+
+---
+
+## Pensive Knowledge Extraction
+
+The `/pensive-import` skill and `sv pensive extract` CLI extract operational knowledge from a project and write it to the Pensive memory system, making it available across all future sessions.
+
+```bash
+# From any supervised project session:
+/pensive-import
+
+# Or from the CLI:
+sv pensive extract <project-name>
+```
+
+What it extracts: SSH access patterns, CLI commands, tool deployment steps, key file locations, credentials references, and operational gotchas. Uses `claude -p` for AI extraction with a heuristic fallback.
+
+---
+
 ## Skills
 
 Skills are slash commands available inside Claude sessions supervised by this server. They're stored in `skills/` and loaded into Claude via `CLAUDE.md`.
@@ -309,6 +420,7 @@ Skills are slash commands available inside Claude sessions supervised by this se
 | `/supervisor-policy` | Reference for what gets auto-approved, auto-denied, or escalated |
 | `/subagent-communication` | Reference for `sv` MQTT commands: pub, chat, retain, request |
 | `/post-compaction-recovery` | Guides recovery after context compaction |
+| `/pensive-import` | Extract operational knowledge from the current project and seed it into Pensive |
 
 ## Environment Variables
 
@@ -449,7 +561,7 @@ claude-supervisor/
 │   ├── collab/
 │   ├── feasibility/
 │   ├── centurion/
-│   └── ...                      # 13 skills total
+│   └── ...                      # 14 skills total
 ├── bin/                         # CLI utilities (sv helper, token refresh, etc.)
 ├── docs/                        # Documentation and usage guides
 ├── scripts/                     # Maintenance scripts (eval housekeeping, release checks)

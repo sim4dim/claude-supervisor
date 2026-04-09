@@ -84,7 +84,12 @@ Wait for the moltke subagent to complete.
 2. Present the plan and review to the user in full.
 3. Highlight the **VERDICT** (GO / NO-GO / CONDITIONAL) prominently.
 4. If there are BLOCKERS, list them clearly at the top of your summary.
-5. Clean up: `sv chat clear $ROOM`
+5. Publish the verdict as a one-line discovery so it is captured in Pensive memory:
+   ```bash
+   sv pub discovery "VERDICT [proposal-topic]: GO|NO-GO|CONDITIONAL — <one-sentence justification>"
+   ```
+   Use the actual proposal topic in place of "proposal-topic" and the Moltke verdict in place of the placeholder.
+6. Clean up: `sv chat clear $ROOM`
 
 ---
 

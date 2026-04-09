@@ -198,6 +198,9 @@ Phase B — spawn **MODERATOR VERDICT** (`subagent_type: moltke`): Prompt:
 > 3. Which blind spots (if any) materially changed the debate
 > 4. An actionable recommendation the user can act on
 > Post with: `sv chat post $ROOM '[ROUND 5 — VERDICT] <your verdict>'`
+> Then publish the verdict as a one-line discovery so it is captured in Pensive memory:
+> `sv pub discovery "VERDICT [topic]: <winner> — <actionable recommendation in one sentence>"`
+> Use the actual debate topic in place of "topic".
 
 Wait for the verdict to complete.
 

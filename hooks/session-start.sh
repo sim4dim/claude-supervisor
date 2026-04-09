@@ -46,3 +46,14 @@ if [ -f "$EXCERPT" ]; then
     echo "The above is the visible conversation from before compaction. Use it to maintain continuity. Extract key decisions as a mental discussion trail (trigger → investigation → options → decision → outcome) before continuing work."
   fi
 fi
+
+# ── Pensive cross-project memory injection ──────────────────────────────────
+PENSIVE_MEMORIES=$(sv recall --startup --limit 10 2>/dev/null || true)
+if [ -n "$PENSIVE_MEMORIES" ]; then
+  echo "=== Pensive Cross-Project Memory ==="
+  echo ""
+  echo "$PENSIVE_MEMORIES"
+  echo ""
+  echo "=== End Pensive Memory ==="
+  echo ""
+fi

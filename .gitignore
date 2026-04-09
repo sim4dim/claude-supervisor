@@ -6,4 +6,7 @@ logs/
 drops/
 screenshots/
 .claude/
+!.claude/hooks/
+!.claude/settings.json
+!.claude/rules/
 *.log
