@@ -26,6 +26,8 @@
 #   sv task update <id> --status in_progress
 #   sv task start <id>
 #   sv task close <id>
+#   sv remember "Auth tokens expire after 1h" [--world] [--type <type>] [--tier L1|L2|L3] [--tags '["tag"]'] [--project <name>]
+#   sv recall [<query>] [--world] [--global] [--project <name>] [--limit N] [--startup]
 
 set -euo pipefail
 
@@ -550,18 +552,413 @@ print(f'Updated {task_id} -> {new_status}')
   esac
 }
 
+# ─── sv remember ─────────────────────────────────────────────────────────────
+
+cmd_remember() {
+  local content=""
+  local type="discovery"
+  local scope="project"
+  local project="${SV_PROJECT:-$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")}"
+  local tier="L2"
+  local tags="[]"
+
+  # Parse flags
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --world)    scope="world"; project="_world"; tier="L1"; shift ;;
+      --type)     type="$2"; shift 2 ;;
+      --tier)     tier="$2"; shift 2 ;;
+      --tags)     tags="$2"; shift 2 ;;
+      --project)  project="$2"; shift 2 ;;
+      *)          content="$content $1"; shift ;;
+    esac
+  done
+  content="${content# }"  # trim leading space
+
+  if [[ -z "$content" ]]; then
+    echo "Usage: sv remember <content> [--world] [--type <type>] [--tags '<json>']" >&2
+    exit 1
+  fi
+
+  local port="${SUPERVISOR_PORT:-3847}"
+  local token
+  token=$(cat "$HOME/.claude/.supervisor-hook-token" 2>/dev/null || echo "")
+
+  if [[ -z "$token" ]]; then
+    echo "Error: No supervisor hook token found at ~/.claude/.supervisor-hook-token" >&2
+    exit 1
+  fi
+
+  # Build JSON payload using Python for safe escaping (tags is already a JSON value)
+  local payload
+  payload=$(python3 -c "
+import json, sys
+content, type_, scope, project, tier, tags_str, source = sys.argv[1:]
+try:
+    tags = json.loads(tags_str)
+except Exception:
+    tags = []
+obj = {
+    'content': content,
+    'type': type_,
+    'scope': scope,
+    'project': project,
+    'tier': tier,
+    'tags': tags,
+    'source': source,
+}
+print(json.dumps(obj, ensure_ascii=False))
+" "$content" "$type" "$scope" "$project" "$tier" "$tags" "sv-cli")
+
+  local result
+  result=$(curl -s -X POST "http://localhost:${port}/api/pensive/remember" \
+    -H "Authorization: Bearer ${token}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" 2>/dev/null)
+
+  if [[ $? -eq 0 && -n "$result" ]]; then
+    echo "$result"
+  else
+    echo "Error: Could not reach supervisor at localhost:${port}" >&2
+    exit 1
+  fi
+}
+
+# ─── sv recall ───────────────────────────────────────────────────────────────
+
+cmd_recall() {
+  local query=""
+  local scope=""
+  local project="${SV_PROJECT:-$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")}"
+  local limit="10"
+  local startup=""
+
+  # Parse flags
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --world)    scope="world"; shift ;;
+      --global)   scope=""; project=""; shift ;;
+      --project)  project="$2"; shift 2 ;;
+      --limit)    limit="$2"; shift 2 ;;
+      --startup)  startup="true"; shift ;;
+      *)          query="$query $1"; shift ;;
+    esac
+  done
+  query="${query# }"
+
+  local port="${SUPERVISOR_PORT:-3847}"
+  local token
+  token=$(cat "$HOME/.claude/.supervisor-hook-token" 2>/dev/null || echo "")
+
+  if [[ -z "$token" ]]; then
+    echo "Error: No supervisor hook token found at ~/.claude/.supervisor-hook-token" >&2
+    exit 1
+  fi
+
+  # Build query string
+  local qs="limit=${limit}"
+  [[ -n "$query" ]] && qs="${qs}&query=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$query")"
+  [[ -n "$project" ]] && qs="${qs}&project=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$project'))")"
+  [[ -n "$scope" ]] && qs="${qs}&scope=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$scope'))")"
+  [[ -n "$startup" ]] && qs="${qs}&startup=true"
+
+  local result
+  result=$(curl -s "http://localhost:${port}/api/pensive/memories?${qs}" \
+    -H "Authorization: Bearer ${token}" 2>/dev/null)
+
+  if [[ $? -eq 0 && -n "$result" ]]; then
+    # Pretty-print if startup mode, otherwise raw JSON
+    if [[ -n "$startup" ]]; then
+      echo "$result" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for m in data.get('memories', []):
+    tier = m.get('tier', 'L2')
+    compact = m.get('compact_form') or m.get('content', '')[:100]
+    print(f'[{tier}] {compact}')
+" 2>/dev/null || echo "$result"
+    else
+      echo "$result"
+    fi
+  else
+    echo "Error: Could not reach supervisor at localhost:${port}" >&2
+    exit 1
+  fi
+}
+
+# ─── sv pensive ──────────────────────────────────────────────────────────────
+
+cmd_pensive() {
+  local action="${1:?Usage: sv pensive <extract> <project> [--dry-run]}"
+  shift
+
+  case "$action" in
+    extract) cmd_pensive_extract "$@" ;;
+    *)
+      echo "Unknown pensive action: $action (use extract)" >&2; exit 1 ;;
+  esac
+}
+
+cmd_pensive_extract() {
+  local target_project=""
+  local dry_run=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry_run=true; shift ;;
+      -*)        echo "Unknown option: $1" >&2; exit 1 ;;
+      *)
+        if [[ -z "$target_project" ]]; then
+          target_project="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$target_project" ]]; then
+    echo "Usage: sv pensive extract <project> [--dry-run]" >&2
+    exit 1
+  fi
+
+  local project_dir="$HOME/projects/${target_project}"
+  if [[ ! -d "$project_dir" ]]; then
+    echo "Error: Project directory not found: $project_dir" >&2
+    exit 1
+  fi
+
+  echo "Scanning project: $target_project ($project_dir)"
+  [[ "$dry_run" == "true" ]] && echo "[DRY RUN] No memories will be written."
+
+  # ── Build list of knowledge source files ──────────────────────────────────
+  local sources=()
+
+  _add_source() {
+    local f="$1"
+    if [[ -f "$f" && -s "$f" ]]; then
+      local size
+      size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
+      if [[ "$size" -lt 51200 ]]; then
+        sources+=("$f")
+      else
+        echo "  Skipping (>50KB): $f"
+      fi
+    fi
+  }
+
+  # Fixed candidates
+  _add_source "$project_dir/CLAUDE.md"
+  _add_source "$project_dir/README.md"
+  _add_source "$project_dir/tools/README.md"
+
+  # .claude/rules/*.md
+  for f in "$project_dir/.claude/rules/"*.md; do
+    _add_source "$f"
+  done
+
+  # .claude/settings.local.json
+  _add_source "$project_dir/.claude/settings.local.json"
+
+  # .claude/transcript-excerpt.md
+  _add_source "$project_dir/.claude/transcript-excerpt.md"
+
+  # docs/*.md (up to 20)
+  local doc_count=0
+  for f in "$project_dir/docs/"*.md; do
+    [[ $doc_count -ge 20 ]] && break
+    _add_source "$f" && ((doc_count++)) || true
+  done
+
+  # tools/*/README.md
+  for f in "$project_dir/tools/"*/README.md; do
+    _add_source "$f"
+  done
+
+  # tools/*/USAGE.txt and USAGE.md
+  for f in "$project_dir/tools/"*/USAGE.txt "$project_dir/tools/"*/USAGE.md; do
+    _add_source "$f"
+  done
+
+  if [[ ${#sources[@]} -eq 0 ]]; then
+    echo "No knowledge sources found in $project_dir"
+    exit 0
+  fi
+
+  echo "Found ${#sources[@]} source file(s)."
+
+  # ── Fetch existing memories for deduplication (skip in dry-run for speed) ──
+  local existing_memories=""
+  if [[ "$dry_run" != "true" ]]; then
+  existing_memories=$(timeout 10 sv recall --project "$target_project" --limit 50 2>/dev/null \
+    | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for m in data.get('memories', []):
+        print(m.get('content', m.get('compact_form', '')))
+except Exception:
+    pass
+" 2>/dev/null || true)
+  fi
+
+  # ── claude -p extraction prompt ───────────────────────────────────────────
+  local extraction_prompt='Extract operational knowledge from this project file. Focus on:
+- How to connect to remote systems (SSH, API endpoints, ports, credentials)
+- Command recipes that work (and gotchas about what does not work)
+- Tool usage patterns and deployment instructions
+- File locations and data layouts on remote systems
+- Critical rules and constraints the user has documented
+
+Output ONLY the operational knowledge as numbered items, one per line.
+Each item should be self-contained (understandable without reading the source file).
+Skip architectural descriptions, code structure, and generic documentation.
+If the file has no operational knowledge, output: NONE
+Keep each item under 200 characters.'
+
+  # ── Fallback heuristic extractor (when claude -p unavailable) ─────────────
+  _heuristic_extract() {
+    local file="$1"
+    # Strip supervisor boilerplate from CLAUDE.md
+    local content
+    content=$(python3 -c "
+import sys, re
+with open(sys.argv[1]) as f:
+    text = f.read()
+# Remove supervisor boilerplate block
+text = re.sub(r'<!--\s*SUPERVISOR-START\s*-->.*?<!--\s*SUPERVISOR-END\s*-->', '', text, flags=re.DOTALL)
+print(text)
+" "$file" 2>/dev/null || cat "$file")
+
+    echo "$content" | grep -E '(ssh |scp |rsync |curl |wget |https?://|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|:[0-9]{2,5}|/home/|/etc/|/var/|/opt/|password|token|key=|API_|SECRET|PORT=|HOST=|\.sh |python3 |node |docker |kubectl )' \
+      | grep -v '^\s*#' \
+      | grep -v '<!--' \
+      | sed 's/^\s*//' \
+      | grep -v '^$' \
+      | head -20 \
+      | nl -w2 -s'. '
+  }
+
+  # ── Process each source file ───────────────────────────────────────────────
+  local files_scanned=0
+  local memories_written=0
+  local errors=0
+
+  for src in "${sources[@]}"; do
+    local rel="${src#$project_dir/}"
+    echo ""
+    echo "── $rel"
+    ((files_scanned++))
+
+    # Strip supervisor boilerplate if this is CLAUDE.md
+    local file_content
+    file_content=$(python3 -c "
+import sys, re
+with open(sys.argv[1]) as f:
+    text = f.read()
+if sys.argv[1].endswith('CLAUDE.md'):
+    text = re.sub(r'<!--\s*SUPERVISOR-START\s*-->.*?<!--\s*SUPERVISOR-END\s*-->', '', text, flags=re.DOTALL)
+print(text)
+" "$src" 2>/dev/null)
+
+    if [[ -z "$file_content" ]]; then
+      echo "  (empty after preprocessing — skipping)"
+      continue
+    fi
+
+    # Try claude -p extraction (skip for dry-run — use heuristic only)
+    local raw_items=""
+    if [[ "$dry_run" != "true" ]] && command -v claude >/dev/null 2>&1; then
+      raw_items=$(echo "$file_content" | \
+        timeout 60 claude -p "$extraction_prompt" --output-format text 2>/dev/null || true)
+      if [[ -z "$raw_items" ]]; then
+        echo "  Warning: claude -p returned empty output — falling back to heuristic"
+        raw_items=$(_heuristic_extract "$src")
+      fi
+    else
+      echo "  Note: claude not found — using heuristic extractor"
+      raw_items=$(_heuristic_extract "$src")
+    fi
+
+    # Parse numbered items: strip leading "N. " or "N) "
+    local items=()
+    while IFS= read -r line; do
+      # Strip leading number+punctuation+space
+      local item
+      item=$(echo "$line" | sed 's/^[0-9]\+[.)]\s*//' | sed 's/^\s*//' | sed 's/\s*$//')
+      [[ -z "$item" || "$item" == "NONE" ]] && continue
+      [[ ${#item} -gt 200 ]] && item="${item:0:200}"
+      items+=("$item")
+    done <<< "$raw_items"
+
+    if [[ ${#items[@]} -eq 0 ]]; then
+      echo "  No operational knowledge found."
+      [[ -z "$raw_items" ]] || echo "  (Output was: ${raw_items:0:100})"
+      sleep 2
+      continue
+    fi
+
+    echo "  Extracted ${#items[@]} item(s)."
+
+    for item in "${items[@]}"; do
+      # Deduplication: simple substring check against existing memories
+      local is_dup=false
+      if [[ -n "$existing_memories" ]]; then
+        # Check if first 60 chars of item appear in existing memories
+        local prefix="${item:0:60}"
+        if echo "$existing_memories" | grep -qF "$prefix" 2>/dev/null; then
+          is_dup=true
+        fi
+      fi
+
+      if [[ "$is_dup" == "true" ]]; then
+        echo "  [DUP] $item"
+        continue
+      fi
+
+      if [[ "$dry_run" == "true" ]]; then
+        echo "  [WOULD WRITE] $item"
+        ((memories_written++))
+      else
+        local result
+        if result=$(sv remember "$item" --project "$target_project" --tier L2 --type infrastructure 2>&1); then
+          echo "  [OK] $item"
+          ((memories_written++))
+          # Append to existing_memories so later items in this run can dedup against it
+          existing_memories="${existing_memories}"$'\n'"${item}"
+        else
+          echo "  [WARN] Failed to write memory: $result"
+          ((errors++))
+        fi
+      fi
+    done
+
+    sleep 2
+  done
+
+  echo ""
+  echo "─────────────────────────────────────────────"
+  echo "Files scanned:    $files_scanned"
+  echo "Memories written: $memories_written"
+  [[ $errors -gt 0 ]] && echo "Errors:           $errors"
+  [[ "$dry_run" == "true" ]] && echo "(dry run — nothing was written)"
+  echo "─────────────────────────────────────────────"
+}
+
 # ─── Dispatch ────────────────────────────────────────────────────────────────
 
-cmd="${1:?Usage: sv <pub|chat|read|retain|clear|request|respond|task> ...}"
+cmd="${1:?Usage: sv <pub|chat|read|retain|clear|request|respond|task|remember|recall|pensive> ...}"
 shift
 case "$cmd" in
-  pub)     cmd_pub "$@" ;;
-  chat)    cmd_chat "$@" ;;
-  read)    cmd_read "$@" ;;
-  retain)  cmd_retain "$@" ;;
-  clear)   cmd_clear "$@" ;;
-  request) cmd_request "$@" ;;
-  respond) cmd_respond "$@" ;;
-  task)    cmd_task "$@" ;;
-  *)       echo "Unknown command: $cmd" >&2; exit 1 ;;
+  pub)      cmd_pub "$@" ;;
+  chat)     cmd_chat "$@" ;;
+  read)     cmd_read "$@" ;;
+  retain)   cmd_retain "$@" ;;
+  clear)    cmd_clear "$@" ;;
+  request)  cmd_request "$@" ;;
+  respond)  cmd_respond "$@" ;;
+  task)     cmd_task "$@" ;;
+  remember) cmd_remember "$@" ;;
+  recall)   cmd_recall "$@" ;;
+  pensive)  cmd_pensive "$@" ;;
+  *)        echo "Unknown command: $cmd" >&2; exit 1 ;;
 esac

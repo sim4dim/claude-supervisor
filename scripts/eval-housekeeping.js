@@ -8,6 +8,7 @@
 import { readFileSync, writeFileSync, existsSync, appendFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -15,6 +16,8 @@ const HISTORY_FILE = join(ROOT, 'logs', 'eval-history.jsonl');
 const DYNAMIC_RULES_FILE = join(ROOT, 'hooks', 'dynamic-approvals.sh');
 const HOUSEKEEPING_LOG = join(ROOT, 'logs', 'housekeeping.log');
 const STATIC_HOOK = join(ROOT, 'hooks', 'pre-tool-use.sh');
+const DENIAL_WATERMARK_FILE = join(ROOT, 'logs', 'denial-aggregation-watermark.json');
+const SV_BIN = join(ROOT, 'bin', 'sv');
 
 // Minimum occurrences before a pattern is considered for auto-approve
 const MIN_OCCURRENCES = 3;
@@ -71,6 +74,18 @@ function extractCommandPattern(entry) {
     if (firstToken.includes('/')) {
         firstToken = firstToken.split('/').pop();
     }
+
+    // Validate: must look like an actual command name
+    // - Must not start with $, +, -, ., (, )
+    // - Must not contain shell metacharacters: (, ), {, }, [, ]
+    // - Must not be a pure number or version string (e.g. "2.1.69")
+    // - Must consist only of alphanumeric chars, hyphens, underscores, dots (like python3, git, ssh-keyscan)
+    // - Must be at least 2 characters long
+    if (!firstToken || firstToken.length < 2) return null;
+    if (/^[$+\-.(]/.test(firstToken)) return null;
+    if (/[(){}[\]]/.test(firstToken)) return null;
+    if (/^[0-9]/.test(firstToken)) return null;  // starts with digit — not a command name
+    if (!/^[a-zA-Z][a-zA-Z0-9._-]*$/.test(firstToken)) return null;
 
     return firstToken;
 }
@@ -154,6 +169,86 @@ function escapeRegex(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * Reads eval-history.jsonl since the last watermark, counts denial patterns,
+ * and saves Pensive memories for any pattern denied 3+ times across sessions.
+ */
+function aggregateDenialPatterns(history) {
+    // Load watermark (last processed timestamp)
+    let watermarkTs = 0;
+    if (existsSync(DENIAL_WATERMARK_FILE)) {
+        try {
+            const w = JSON.parse(readFileSync(DENIAL_WATERMARK_FILE, 'utf-8'));
+            watermarkTs = new Date(w.lastProcessedTs || 0).getTime();
+        } catch {}
+    }
+
+    // Filter to new entries only (denied decisions since watermark)
+    const newEntries = history.filter(e => {
+        if (e.decision !== 'denied') return false;
+        return new Date(e.ts || 0).getTime() > watermarkTs;
+    });
+
+    if (newEntries.length === 0) {
+        log('Denial aggregation: no new denials since last run');
+        return;
+    }
+
+    log(`Denial aggregation: analyzing ${newEntries.length} new denied entries`);
+
+    // Group denials by tool+pattern key, tracking projects
+    const denialMap = new Map();
+    for (const entry of newEntries) {
+        const tool = entry.tool || 'Unknown';
+        const pattern = extractCommandPattern(entry) || entry.command?.substring(0, 60) || 'unknown';
+        const key = `${tool}:${pattern}`;
+        if (!denialMap.has(key)) {
+            denialMap.set(key, { tool, pattern, count: 0, projects: new Set(), reasons: [] });
+        }
+        const d = denialMap.get(key);
+        d.count++;
+        if (entry.project) d.projects.add(entry.project);
+        if (entry.reason && d.reasons.length < 3) d.reasons.push(entry.reason);
+    }
+
+    // Save Pensive memory for patterns denied 3+ times
+    const threshold = 3;
+    let saved = 0;
+    for (const [, d] of denialMap) {
+        if (d.count < threshold) continue;
+        const projectList = [...d.projects].join(', ') || 'unknown';
+        const msg = `Recurring denial pattern: [${d.tool}] "${d.pattern}" denied ${d.count} times across projects: ${projectList}`;
+        log(`DENIAL PATTERN: ${msg}`);
+        try {
+            execFileSync(SV_BIN, ['remember', '--world', '--tier', 'L3', msg], {
+                timeout: 10_000,
+                stdio: ['ignore', 'pipe', 'pipe'],
+            });
+            saved++;
+        } catch (e) {
+            log(`Warning: could not save denial pattern to Pensive: ${e.message}`);
+        }
+    }
+
+    if (saved > 0) {
+        log(`Saved ${saved} denial pattern(s) to Pensive`);
+    } else {
+        log(`Denial aggregation: no patterns met the ${threshold}+ threshold`);
+    }
+
+    // Update watermark to the latest entry timestamp
+    const latestTs = newEntries.reduce((max, e) => {
+        const t = new Date(e.ts || 0).getTime();
+        return t > max ? t : max;
+    }, 0);
+    if (latestTs > 0) {
+        writeFileSync(DENIAL_WATERMARK_FILE, JSON.stringify({
+            lastProcessedTs: new Date(latestTs).toISOString(),
+            updatedAt: new Date().toISOString(),
+        }));
+    }
+}
+
 function main() {
     log('=== Housekeeping run started ===');
 
@@ -164,6 +259,9 @@ function main() {
         log('No history to analyze');
         return;
     }
+
+    // Aggregate denial patterns → Pensive (runs regardless of whether new approve-rules are found)
+    aggregateDenialPatterns(history);
 
     // Group by command pattern
     const patternStats = new Map();
@@ -217,7 +315,7 @@ function main() {
     }
 
     if (newPatterns.size === 0) {
-        log('No new patterns found to add');
+        log('No new auto-approve patterns found to add');
         log('=== Housekeeping run completed ===');
         return;
     }
@@ -233,7 +331,6 @@ function main() {
     }
 
     log(`Generated ${newPatterns.size} new dynamic rules → ${DYNAMIC_RULES_FILE}`);
-    log('=== Housekeeping run completed ===');
 
     // Also sync dynamic rules to .claude/hooks/ if it exists
     const dotClaudeHooksDir = join(ROOT, '.claude', 'hooks');
@@ -242,6 +339,8 @@ function main() {
         writeFileSync(dotClaudeDynamic, content);
         log(`Synced dynamic rules to ${dotClaudeDynamic}`);
     } catch {}
+
+    log('=== Housekeeping run completed ===');
 }
 
 main();

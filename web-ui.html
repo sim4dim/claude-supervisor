@@ -130,6 +130,9 @@
       margin-left: 6px; flex-shrink: 0;
     }
     .mobile-paste-btn:active { background: var(--accent); color: #fff; }
+    .mobile-paste-area {
+      position: fixed; top: -9999px; left: -9999px; opacity: 0; width: 1px; height: 1px;
+    }
     .term-empty {
       position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
       color: var(--muted); font-size: 14px; text-align: center; padding: 20px;
@@ -187,7 +190,7 @@
     .filter-btn .proj-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: middle; }
 
     .approval-scroll {
-      flex: 1; overflow-y: auto; min-height: 0;
+      flex: 1; overflow: hidden; min-height: 0;
       display: flex; flex-direction: column; gap: 8px; padding: 8px 12px;
       scrollbar-width: thin; scrollbar-color: #444 #1a1a2e;
     }
@@ -204,8 +207,9 @@
       flex-shrink: 0;
     }
     .sv-panel.panel-open {
-      flex: 1 0 auto;
+      flex: 1 1 0;
       display: flex; flex-direction: column;
+      min-height: 80px;
     }
     .sv-panel-hdr {
       display: flex; align-items: center; justify-content: space-between;
@@ -673,7 +677,7 @@
     .team-chat-count { background: #3b82f6; color: #fff; font-size: 10px; font-weight: 700;
       padding: 1px 6px; border-radius: 10px; display: none; }
     .team-chat-count.show { display: inline-block; }
-    #teamChatBody { display: flex; flex-direction: column; padding: 0 12px 12px; margin-top: 0; }
+    #teamChatBody.open { display: flex; flex-direction: column; padding: 0 12px 12px; margin-top: 0; }
     .tc-room-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
     .tc-room-bar select { background: #1e293b; border: 1px solid #334155; border-radius: 4px;
       color: #e2e8f0; font-size: 11px; padding: 3px 6px; cursor: pointer; outline: none; flex: 1; min-width: 80px; }
@@ -703,6 +707,51 @@
     .tc-input button { background: #3b82f6; border: none; border-radius: 5px; color: #fff;
       font-size: 12px; padding: 5px 10px; cursor: pointer; white-space: nowrap; }
     .tc-input button:hover { background: #2563eb; }
+    /* Pensive Memory */
+    .pensive-entry {
+      padding: 7px 12px; border-top: 1px solid #1e1e3a; font-size: 12px;
+      display: flex; flex-direction: column; gap: 4px; position: relative;
+    }
+    .pensive-entry:hover { background: rgba(255,255,255,0.03); }
+    .pensive-entry .pe-header {
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    }
+    .pensive-entry .pe-scope {
+      font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px;
+    }
+    .pensive-entry .pe-scope.world { background: #1e3a5f; color: #60a5fa; }
+    .pensive-entry .pe-scope.project { background: #3a2e1e; color: #f59e0b; }
+    .pensive-entry .pe-type {
+      font-size: 10px; color: #888; text-transform: uppercase;
+    }
+    .pensive-entry .pe-tier {
+      font-size: 10px; color: #888; font-weight: 600;
+    }
+    .pensive-entry .pe-content {
+      color: #c4c4c8; font-size: 12px; line-height: 1.4;
+      cursor: pointer;
+    }
+    .pensive-entry .pe-content.collapsed {
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .pensive-entry .pe-meta {
+      display: none; font-size: 11px; color: #666; margin-top: 4px;
+    }
+    .pensive-entry.expanded .pe-meta { display: block; }
+    .pensive-entry.expanded .pe-content { white-space: normal; }
+    .pensive-entry .pe-actions {
+      position: absolute; top: 5px; right: 6px; display: flex; gap: 2px;
+    }
+    .pensive-entry .pe-edit {
+      background: #3a3520; border: 1px solid #665; border-radius: 3px; color: #eab308;
+      cursor: pointer; padding: 3px 7px; font-size: 12px;
+    }
+    .pensive-entry .pe-edit:hover { background: #4a4520; }
+    .pensive-entry .pe-delete {
+      background: #3a2020; border: 1px solid #644; border-radius: 3px; color: #f87171;
+      cursor: pointer; padding: 3px 7px; font-size: 12px;
+    }
+    .pensive-entry .pe-delete:hover { background: #4a2020; }
     /* Document Viewer */
     .doc-viewer {
       background: #1a1a2e; border: 1px solid #333; border-radius: 12px;
@@ -1009,6 +1058,7 @@ body.lcars .dot.on { animation: lcars-pulse 2s ease-in-out infinite; }
       <div class="term-tab-bar" id="termTabBar">
         <button class="term-new-btn" onclick="showNewTerminalDialog()">+ New</button>
         <button class="mobile-paste-btn" id="mobilePasteBtn" onclick="mobilePaste()" title="Paste from clipboard">Paste</button>
+        <textarea id="mobilePasteArea" class="mobile-paste-area" aria-hidden="true" tabindex="-1"></textarea>
       </div>
       <!-- Version update banner -->
       <div class="version-banner" id="versionBanner">
@@ -1123,6 +1173,226 @@ body.lcars .dot.on { animation: lcars-pulse 2s ease-in-out infinite; }
           </div>
           <div class="sv-panel-body" id="activityLogBody">
             <div id="log"></div>
+          </div>
+        </div>
+
+        <!-- Pensive Memory -->
+        <div class="sv-panel" data-panel="pensive" draggable="false">
+          <div class="sv-panel-hdr" onclick="togglePensive()">
+            <div style="display:flex;align-items:center;gap:8px">
+              <h3>Pensive</h3>
+              <span class="sv-panel-badge" id="pensiveBadge">0</span>
+            </div>
+            <span class="sv-panel-toggle" id="pensiveToggle">&#9654;</span>
+          </div>
+          <div class="sv-panel-body" id="pensiveBody">
+            <div style="padding:6px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <input type="text" id="pensiveSearch" placeholder="Search memories..." style="flex:1;min-width:120px;padding:4px 8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:12px;" onkeydown="if(event.key==='Enter')fetchPensive(true)">
+              <select id="pensiveScope" onchange="onPensiveScopeChange()" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                <option value="">All</option>
+                <option value="world">World</option>
+                <option value="project">Project</option>
+              </select>
+              <select id="pensiveProject" onchange="fetchPensive(true)" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                <option value="">All Projects</option>
+              </select>
+              <select id="pensiveType" onchange="fetchPensive(true)" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                <option value="">All Types</option>
+                <option value="discovery">Discovery</option>
+                <option value="fact">Fact</option>
+                <option value="infrastructure">Infra</option>
+                <option value="convention">Convention</option>
+                <option value="preference">Preference</option>
+                <option value="decision">Decision</option>
+                <option value="error">Error</option>
+              </select>
+              <button onclick="fetchPensive(true)" style="padding:4px 8px;background:#2563eb;border:none;border-radius:4px;color:white;font-size:11px;cursor:pointer;">Search</button>
+              <button onclick="togglePensiveForm()" style="padding:4px 8px;background:#22c55e;border:none;border-radius:4px;color:white;font-size:11px;cursor:pointer;font-weight:bold;" title="Add new memory">+</button>
+            </div>
+            <div id="pensiveForm" style="display:none;padding:8px 12px;border-bottom:1px solid #333;">
+              <textarea id="pensiveNewContent" rows="2" placeholder="Memory content..." style="width:100%;padding:6px 8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:12px;resize:vertical;box-sizing:border-box;"></textarea>
+              <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap;">
+                <select id="pensiveNewScope" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                  <option value="project">Project</option>
+                  <option value="world">World</option>
+                </select>
+                <select id="pensiveNewType" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                  <option value="fact">Fact</option>
+                  <option value="discovery">Discovery</option>
+                  <option value="infrastructure">Infrastructure</option>
+                  <option value="convention">Convention</option>
+                  <option value="preference">Preference</option>
+                  <option value="decision">Decision</option>
+                  <option value="error">Error</option>
+                </select>
+                <select id="pensiveNewTier" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                  <option value="L2">L2 (project)</option>
+                  <option value="L1">L1 (critical)</option>
+                  <option value="L3">L3 (archive)</option>
+                </select>
+                <button onclick="submitPensiveMemory()" style="padding:4px 10px;background:#2563eb;border:none;border-radius:4px;color:white;font-size:11px;cursor:pointer;">Save</button>
+                <button onclick="togglePensiveForm()" style="padding:4px 10px;background:#444;border:none;border-radius:4px;color:#ccc;font-size:11px;cursor:pointer;">Cancel</button>
+              </div>
+            </div>
+            <div id="pensiveList"><div style="padding:12px 16px;color:#555;font-size:12px;">Open to load memories</div></div>
+          </div>
+        </div>
+
+        <!-- PII Scrubbing Panel -->
+        <div class="sv-panel" data-panel="piiConfig" draggable="false">
+          <div class="sv-panel-hdr" onclick="togglePanel('piiConfig')">
+            <div style="display:flex;align-items:center;gap:8px">
+              <h3>PII Scrubbing</h3>
+              <span class="sv-panel-badge" id="piiConfigBadge" style="display:none">ON</span>
+            </div>
+            <span class="sv-panel-toggle" id="piiConfigToggle">&#9654;</span>
+          </div>
+          <div class="sv-panel-body" id="piiConfigBody">
+            <div style="padding:12px 16px;display:flex;flex-direction:column;gap:14px;">
+
+              <!-- Enable toggle -->
+              <div style="display:flex;align-items:center;justify-content:space-between;">
+                <span style="font-size:13px;font-weight:600;color:var(--text)">Enable PII Scrubbing</span>
+                <label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer;">
+                  <input type="checkbox" id="piiEnabled" style="opacity:0;width:0;height:0;" onchange="onPiiEnabledChange()">
+                  <span id="piiEnabledTrack" style="position:absolute;inset:0;background:#444;border-radius:12px;transition:background 0.2s;"></span>
+                  <span id="piiEnabledThumb" style="position:absolute;top:3px;left:3px;width:18px;height:18px;background:#fff;border-radius:50%;transition:transform 0.2s;"></span>
+                </label>
+              </div>
+
+              <!-- Path selector -->
+              <div>
+                <div class="section-title" style="margin-bottom:6px;">Scrub Path</div>
+                <div style="display:flex;flex-direction:column;gap:6px;">
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="radio" name="piiPath" id="piiPathMcp" value="mcp" style="accent-color:var(--accent);">
+                    MCP — tool wrapper, for Max plan <span style="color:var(--muted);font-size:11px;">(scrubs tool results before Claude sees them)</span>
+                  </label>
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="radio" name="piiPath" id="piiPathApi" value="api" style="accent-color:var(--accent);">
+                    API proxy — for API key deployments <span style="color:var(--muted);font-size:11px;">(scrubs /v1/messages before Anthropic)</span>
+                  </label>
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="radio" name="piiPath" id="piiPathBoth" value="both" style="accent-color:var(--accent);">
+                    Both — MCP + API proxy
+                  </label>
+                </div>
+              </div>
+
+              <!-- Mode selector -->
+              <div>
+                <div class="section-title" style="margin-bottom:6px;">Scrub Mode</div>
+                <div style="display:flex;flex-direction:column;gap:6px;">
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="radio" name="piiMode" id="piiModeStructured" value="structured" style="accent-color:var(--accent);">
+                    Structured — realistic fake values (preserves subnet math)
+                  </label>
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="radio" name="piiMode" id="piiModeToken" value="token" style="accent-color:var(--accent);">
+                    Token — bracket tokens like <code style="background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;">[IPv4-001]</code>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Type toggles -->
+              <div>
+                <div class="section-title" style="margin-bottom:6px;">PII Types</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="checkbox" id="piiTypeIPv4" style="accent-color:var(--accent);"> IPv4 Addresses
+                  </label>
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="checkbox" id="piiTypeIPv6" style="accent-color:var(--accent);"> IPv6 Addresses
+                  </label>
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="checkbox" id="piiTypeMAC" style="accent-color:var(--accent);"> MAC Addresses
+                  </label>
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="checkbox" id="piiTypeEMAIL" style="accent-color:var(--accent);"> Email Addresses
+                  </label>
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="checkbox" id="piiTypeHOST" style="accent-color:var(--accent);"> Internal Hostnames
+                  </label>
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="checkbox" id="piiTypePHONE" style="accent-color:var(--accent);"> Phone Numbers
+                  </label>
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="checkbox" id="piiTypeSSN" style="accent-color:var(--accent);"> SSN
+                  </label>
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                    <input type="checkbox" id="piiTypeNAME" style="accent-color:var(--accent);"> Names (context-triggered)
+                  </label>
+                </div>
+              </div>
+
+              <!-- Per-project overrides -->
+              <div>
+                <div class="section-title" style="margin-bottom:6px;">Per-Project Overrides</div>
+                <div id="piiProjectList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"></div>
+                <div id="piiAddProjectForm" style="display:none;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;margin-bottom:6px;">
+                  <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">New project override</div>
+                  <input type="text" id="piiNewProjectName" placeholder="project-name" style="width:100%;padding:4px 8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:var(--text);font-size:12px;box-sizing:border-box;margin-bottom:6px;">
+                  <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;flex-wrap:wrap;">
+                    <label style="font-size:11px;color:var(--muted);">Path:</label>
+                    <select id="piiNPPath" style="padding:3px 6px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:var(--text);font-size:11px;">
+                      <option value="">Global default</option>
+                      <option value="mcp">MCP</option>
+                      <option value="api">API proxy</option>
+                      <option value="both">Both</option>
+                    </select>
+                    <label style="font-size:11px;color:var(--muted);">Mode:</label>
+                    <select id="piiNewProjMode" style="padding:3px 6px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:var(--text);font-size:11px;">
+                      <option value="structured">Structured</option>
+                      <option value="token">Token</option>
+                    </select>
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px;">
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
+                      <input type="checkbox" id="piiNPIPv4" checked style="accent-color:var(--accent);"> IPv4
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
+                      <input type="checkbox" id="piiNPIPv6" checked style="accent-color:var(--accent);"> IPv6
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
+                      <input type="checkbox" id="piiNPMAC" checked style="accent-color:var(--accent);"> MAC
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
+                      <input type="checkbox" id="piiNPEMAIL" checked style="accent-color:var(--accent);"> Email
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
+                      <input type="checkbox" id="piiNPHOST" checked style="accent-color:var(--accent);"> Host
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
+                      <input type="checkbox" id="piiNPPHONE" checked style="accent-color:var(--accent);"> Phone
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
+                      <input type="checkbox" id="piiNPSSN" checked style="accent-color:var(--accent);"> SSN
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
+                      <input type="checkbox" id="piiNPNAME" checked style="accent-color:var(--accent);"> Names
+                    </label>
+                  </div>
+                  <div style="display:flex;gap:6px;">
+                    <button onclick="addPiiProjectOverride()" style="padding:4px 10px;background:var(--accent);border:none;border-radius:4px;color:#000;font-size:11px;font-weight:600;cursor:pointer;">Add</button>
+                    <button onclick="document.getElementById('piiAddProjectForm').style.display='none'" style="padding:4px 10px;background:#333;border:none;border-radius:4px;color:var(--muted);font-size:11px;cursor:pointer;">Cancel</button>
+                  </div>
+                </div>
+                <button onclick="document.getElementById('piiAddProjectForm').style.display=document.getElementById('piiAddProjectForm').style.display==='none'?'block':'none'" style="padding:4px 10px;background:#333;border:none;border-radius:4px;color:var(--muted);font-size:11px;cursor:pointer;">+ Add project</button>
+              </div>
+
+              <!-- Active sessions -->
+              <div>
+                <div class="section-title" style="margin-bottom:6px;">Active PII Sessions <button onclick="fetchPiiStats()" style="padding:1px 6px;background:#333;border:none;border-radius:3px;color:var(--muted);font-size:10px;cursor:pointer;margin-left:6px;">Refresh</button></div>
+                <div id="piiSessionsTable" style="font-size:11px;color:var(--muted);">Loading...</div>
+              </div>
+
+              <!-- Save button -->
+              <div style="display:flex;gap:8px;align-items:center;">
+                <button onclick="savePiiConfig()" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#000;font-size:13px;font-weight:600;cursor:pointer;">Save Config</button>
+                <span id="piiSaveStatus" style="font-size:11px;color:var(--green);display:none;">Saved</span>
+              </div>
+
+            </div>
           </div>
         </div>
 
@@ -1323,7 +1593,7 @@ function connect() {
     requestAnimationFrame(() => {
       for (const id of previouslySubscribed) {
         const tab = terminalTabs.get(id);
-        if (tab) {
+        if (tab && id === activeTerminalId) {
           try { safeFit(tab); sendTerminalResize(id); } catch(e) { console.warn('Resize error on reconnect:', e); }
         }
       }
@@ -1739,11 +2009,13 @@ function switchTerminalTab(id) {
     tab._subscribed = true;
   }
   requestAnimationFrame(() => {
-    try {
-      safeFit(tab);
-      sendTerminalResize(id);
-    } catch(e) {}
-    tab.xterm.focus();
+    requestAnimationFrame(() => {
+      try {
+        safeFit(tab);
+        sendTerminalResize(id);
+      } catch(e) {}
+      tab.xterm.focus();
+    });
   });
 
   renderTerminalTabs();
@@ -1799,24 +2071,50 @@ function closeTerminalTabLocal(id) {
 
 /* ── Mobile paste support ──────────────────────────────── */
 function mobilePaste() {
-  if (!navigator.clipboard || !navigator.clipboard.readText) {
-    // Fallback: focus the terminal so the user can use the system paste
-    const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
-    if (tab) tab.xterm.focus();
-    return;
+  const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
+  if (!tab || !tab.isController) return;
+
+  // Try clipboard API first (works on Android Chrome, some desktop browsers)
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    navigator.clipboard.readText().then(text => {
+      if (text) {
+        tab.xterm.paste(text);
+        tab.xterm.focus();
+      }
+    }).catch(() => {
+      // Clipboard API denied — fall back to textarea method for iOS Safari
+      mobilePasteViaTextarea(tab);
+    });
+  } else {
+    mobilePasteViaTextarea(tab);
   }
-  navigator.clipboard.readText().then(text => {
-    const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
-    if (!tab || !tab.isController) return;
+}
+
+function mobilePasteViaTextarea(tab) {
+  const area = document.getElementById('mobilePasteArea');
+  if (!area) return;
+  area.value = '';
+  area.focus();
+
+  let cleanup;
+  const onInput = () => {
+    const text = area.value;
     if (text) {
       tab.xterm.paste(text);
-      tab.xterm.focus();
     }
-  }).catch(() => {
-    // Permission denied or no text — focus terminal as fallback
-    const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
-    if (tab) tab.xterm.focus();
-  });
+    tab.xterm.focus();
+    area.value = '';
+    clearTimeout(cleanup);
+    area.removeEventListener('input', onInput);
+  };
+
+  area.addEventListener('input', onInput);
+
+  // Clean up after 5 seconds if user doesn't paste
+  cleanup = setTimeout(() => {
+    area.removeEventListener('input', onInput);
+    tab.xterm.focus();
+  }, 5000);
 }
 
 // Show paste button only on touch devices
@@ -2001,7 +2299,10 @@ function sendTerminalResize(id) {
 
 function safeFit(tab) {
   if (!tab || !tab.xterm || !tab.fitAddon) return;
-  const viewport = tab.xterm.element?.querySelector('.xterm-viewport');
+  // Skip fit if container is hidden (zero dimensions cause ~10 column bug)
+  const el = tab.xterm.element;
+  if (el && el.offsetParent === null) return;
+  const viewport = el?.querySelector('.xterm-viewport');
   const scrollTop = viewport ? viewport.scrollTop : null;
   const wasAtBottom = viewport ? (viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 10) : true;
   tab.fitAddon.fit();
@@ -2206,6 +2507,7 @@ function addProjectFilter(name) {
   btn.onclick = () => setFilter(name);
   btn.innerHTML = '<span class="proj-dot" style="background:'+projColor(name)+'"></span>'+esc(name);
   filterBar.appendChild(btn);
+  updatePensiveProjectPicker();
 }
 
 function setFilter(project) {
@@ -2703,6 +3005,11 @@ function handleAgentMessage(msg) {
       break;
     case 'discovery':
       task.discoveries.push({ text: payload.finding || payload.message, time: timestamp });
+      // Refresh Pensive panel on new discoveries
+      if (panelState.pensive) {
+        pensiveCache = null;
+        fetchPensive(true);
+      }
       break;
     case 'coordination':
       task.messages.push({ text: '[coord] ' + payload.message, time: timestamp });
@@ -3249,6 +3556,209 @@ function handleEvalResolved(msg) {
 // Patch projColor for eval history (projColor is defined above as projColor)
 const projColor_fn = typeof projColor === 'function' ? projColor : () => '#71717a';
 
+// ── Pensive Panel ──────────────────────────────────────────────
+
+let pensiveCache = null;
+
+function togglePensive() {
+  togglePanel('pensive');
+  if (panelState.pensive && pensiveCache === null) fetchPensive(false);
+}
+
+async function fetchPensive(force) {
+  if (!force && pensiveCache !== null) { renderPensive(); return; }
+  document.getElementById('pensiveList').innerHTML = '<div style="padding:12px 16px;color:#555;font-size:12px;">Loading...</div>';
+  try {
+    const params = new URLSearchParams();
+    const q = document.getElementById('pensiveSearch').value.trim();
+    const scope = document.getElementById('pensiveScope').value;
+    const type = document.getElementById('pensiveType').value;
+    const project = document.getElementById('pensiveProject').value;
+    if (q) params.set('query', q);
+    if (scope) params.set('scope', scope);
+    if (project) params.set('project', project);
+    if (type) params.set('type', type);
+    params.set('limit', '50');
+    const res = await fetch('/api/pensive/memories?' + params);
+    const data = await res.json();
+    let memories = data.memories || [];
+    pensiveCache = memories;
+    renderPensive();
+  } catch(e) {
+    document.getElementById('pensiveList').innerHTML = '<div style="padding:12px 16px;color:#f87171;font-size:12px;">Failed to load</div>';
+  }
+}
+
+function renderPensive() {
+  const list = document.getElementById('pensiveList');
+  const memories = pensiveCache || [];
+  document.getElementById('pensiveBadge').textContent = memories.length;
+  if (!memories.length) {
+    list.innerHTML = '<div style="padding:12px 16px;color:#555;font-size:12px;">No memories found</div>';
+    return;
+  }
+  list.innerHTML = memories.map(m => {
+    const scopeClass = m.scope === 'world' ? 'world' : 'project';
+    const scopeLabel = m.scope === 'world' ? 'W' : 'P';
+    const scopeTitle = m.scope === 'world' ? 'World memory — loaded in every session' : 'Project memory — loaded for ' + (m.project || 'this project');
+    const age = Math.floor((Date.now() - new Date(m.created_at + 'Z').getTime()) / 86400000);
+    const ageStr = age === 0 ? 'today' : age === 1 ? '1d ago' : age + 'd ago';
+    const vitality = typeof m.vitality === 'number' ? Math.round(m.vitality * 100) : '?';
+    const vitalityRaw = typeof m.vitality === 'number' ? m.vitality.toFixed(3) : '?';
+    const tier = m.tier || 'L2';
+    const tierTitle = 'Tier ' + tier + ': ' + (tier === 'L0' ? 'Identity — always loaded' : tier === 'L1' ? 'Critical — loaded every session' : tier === 'L2' ? 'Important — loaded for matching project' : 'Archive — search only, never auto-loaded');
+    const project = m.project === '_world' ? '' : (m.project || '');
+    const content = m.content || '';
+    const compact = m.compact_form || '';
+    const id = m.id || '';
+    const createdDate = m.created_at ? new Date(m.created_at + 'Z').toLocaleDateString() : '?';
+    return `<div class="pensive-entry" onclick="this.classList.toggle('expanded')">
+      <div class="pe-header">
+        <span class="pe-scope ${scopeClass}">${scopeLabel}</span>
+        <span class="pe-type">${esc(m.type || '?')}</span>
+        <span class="pe-tier">${esc(tier)}</span>
+        <span style="font-size:10px;color:#666;">${vitality}%</span>
+        <span style="font-size:10px;color:#666;">${ageStr}</span>
+        ${project ? `<span style="font-size:10px;color:#888;">· ${esc(project)}</span>` : ''}
+      </div>
+      <div class="pe-content collapsed" title="Click to expand/collapse">${esc(content)}</div>
+      <div class="pe-meta">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <span>${esc(scopeTitle)}</span>
+          <span>${esc(tierTitle)}</span>
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;">
+          <span>Created: ${createdDate}</span>
+          <span>Source: ${esc(m.source || 'auto')}</span>
+          <span>Vitality: ${vitalityRaw}</span>
+          <span>ID: ${esc(id.substring(0, 8))}</span>
+        </div>
+        ${compact ? `<div style="margin-top:4px;"><span style="color:#888;">Compact:</span> <code style="color:#60a5fa;font-size:11px;">${esc(compact)}</code></div>` : ''}
+        ${m.tags && m.tags !== '[]' ? `<div style="margin-top:2px;"><span style="color:#888;">Tags:</span> ${esc(m.tags)}</div>` : ''}
+        ${project ? `<div style="margin-top:2px;"><span style="color:#888;">Project:</span> ${esc(project)}</div>` : ''}
+      </div>
+      <div class="pe-actions">
+        <button class="pe-edit" onclick="event.stopPropagation();editPensiveMemory(this,'${esc(id)}')" title="Edit">✎</button>
+        <button class="pe-delete" onclick="event.stopPropagation();deletePensiveMemory('${esc(id)}')" title="Delete">×</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function deletePensiveMemory(id) {
+  if (!confirm('Archive this memory?')) return;
+  try {
+    const res = await fetch('/api/pensive/memories/' + id, { method: 'DELETE' });
+    if (res.ok) {
+      pensiveCache = (pensiveCache || []).filter(m => m.id !== id);
+      renderPensive();
+    }
+  } catch(e) {
+    console.warn('Failed to archive memory:', e);
+  }
+}
+
+function onPensiveScopeChange() {
+  const scope = document.getElementById('pensiveScope').value;
+  const projectPicker = document.getElementById('pensiveProject');
+  // Hide project picker when scope is "World" (world memories have no project)
+  projectPicker.style.display = scope === 'world' ? 'none' : '';
+  fetchPensive(true);
+}
+
+function updatePensiveProjectPicker() {
+  const sel = document.getElementById('pensiveProject');
+  if (!sel) return;
+  const current = sel.value;
+  const projects = new Set();
+  for (const p of knownProjects) projects.add(p);
+  for (const p of allProjects) projects.add(p);
+  sel.innerHTML = '<option value="">All Projects</option>';
+  for (const p of [...projects].sort()) {
+    const opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = p;
+    if (p === current) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+function togglePensiveForm() {
+  const form = document.getElementById('pensiveForm');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  if (form.style.display === 'block') document.getElementById('pensiveNewContent').focus();
+}
+
+async function submitPensiveMemory() {
+  const content = document.getElementById('pensiveNewContent').value.trim();
+  if (!content) return;
+  const scope = document.getElementById('pensiveNewScope').value;
+  const type = document.getElementById('pensiveNewType').value;
+  const tier = document.getElementById('pensiveNewTier').value;
+  const project = scope === 'world' ? '_world' : (activeFilter !== 'all' ? activeFilter : '');
+  try {
+    const body = { content, type, scope, tier, source: 'web-ui' };
+    if (project) body.project = project;
+    const res = await fetch('/api/pensive/remember', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (res.ok) {
+      document.getElementById('pensiveNewContent').value = '';
+      document.getElementById('pensiveForm').style.display = 'none';
+      pensiveCache = null;
+      fetchPensive(true);
+    }
+  } catch(e) { console.warn('Failed to save memory:', e); }
+}
+
+function editPensiveMemory(btn, id) {
+  const entry = btn.closest('.pensive-entry');
+  const contentEl = entry.querySelector('.pe-content');
+  const originalText = (pensiveCache || []).find(m => m.id === id)?.content || contentEl.textContent;
+
+  // Replace content with textarea
+  const textarea = document.createElement('textarea');
+  textarea.value = originalText;
+  textarea.style.cssText = 'width:100%;padding:6px 8px;background:#1a1a2e;border:1px solid #444;border-radius:4px;color:#e4e4e7;font-size:12px;resize:vertical;min-height:60px;box-sizing:border-box;';
+
+  const actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;gap:6px;margin-top:4px;';
+  actions.innerHTML = `
+    <button onclick="savePensiveEdit('${id}',this)" style="padding:3px 8px;background:#2563eb;border:none;border-radius:3px;color:white;font-size:11px;cursor:pointer;">Save</button>
+    <button onclick="cancelPensiveEdit('${id}')" style="padding:3px 8px;background:#444;border:none;border-radius:3px;color:#ccc;font-size:11px;cursor:pointer;">Cancel</button>
+  `;
+
+  contentEl.style.display = 'none';
+  contentEl.after(textarea, actions);
+  textarea.focus();
+  entry.dataset.editing = 'true';
+}
+
+async function savePensiveEdit(id, btn) {
+  const entry = btn.closest('.pensive-entry');
+  const textarea = entry.querySelector('textarea');
+  const newContent = textarea.value.trim();
+  if (!newContent) return;
+  try {
+    const res = await fetch('/api/pensive/memories/' + id, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: newContent })
+    });
+    if (res.ok) {
+      pensiveCache = null;
+      fetchPensive(true);
+    }
+  } catch(e) { console.warn('Failed to save edit:', e); }
+}
+
+function cancelPensiveEdit(id) {
+  pensiveCache = null;
+  renderPensive();
+}
+
 // ─── Activity Log Collapsible ───────────────────────────────────────────────
 
 let activityLogCollapsed = true;
@@ -3302,6 +3812,7 @@ function fetchAllProjects() {
   fetch('/api/projects/all').then(r => r.json()).then(d => {
     (d.projects || []).forEach(p => allProjects.add(p));
     updateTcRoomSelect();
+    updatePensiveProjectPicker();
   }).catch(() => {});
 }
 
@@ -3566,6 +4077,11 @@ function togglePanel(name) {
     }
   }
   if (toggle) toggle.innerHTML = panelState[name] ? '&#9660;' : '&#9654;';
+  // Redistribute: clear all open panels' inline sizes so CSS flex handles layout
+  document.querySelectorAll('.sv-panel.panel-open').forEach(p => {
+    p.style.flex = '';
+    p.style.flexBasis = '';
+  });
   savePanelOrder();
   initPanelDividers();
 }
@@ -3631,11 +4147,16 @@ function initPanelDividers() {
     panels[i].after(divider);
 
     divider.addEventListener('mousedown', e => {
-      const above = divider.previousElementSibling;
-      const below = divider.nextElementSibling;
-      // Skip if either neighbour isn't an open panel
-      if (!above || !above.classList.contains('sv-panel') || !above.classList.contains('panel-open')) return;
-      if (!below || !below.classList.contains('sv-panel') || !below.classList.contains('panel-open')) return;
+      // Walk siblings to find nearest open panels above and below
+      let above = divider.previousElementSibling;
+      while (above && !(above.classList.contains('sv-panel') && above.classList.contains('panel-open'))) {
+        above = above.previousElementSibling;
+      }
+      let below = divider.nextElementSibling;
+      while (below && !(below.classList.contains('sv-panel') && below.classList.contains('panel-open'))) {
+        below = below.nextElementSibling;
+      }
+      if (!above || !below) return;
 
       e.preventDefault();
       divider.classList.add('dragging');
@@ -3652,10 +4173,11 @@ function initPanelDividers() {
         let newBelow = belowH - delta;
         if (newAbove < MIN) { newAbove = MIN; newBelow = aboveH + belowH - MIN; }
         if (newBelow < MIN) { newBelow = MIN; newAbove = aboveH + belowH - MIN; }
-        above.style.flex = `0 0 ${newAbove}px`;
-        above.style.flexBasis = `${newAbove}px`;
-        below.style.flex = `0 0 ${newBelow}px`;
-        below.style.flexBasis = `${newBelow}px`;
+        const total = newAbove + newBelow;
+        above.style.flex = `${newAbove / total} 1 0`;
+        above.style.flexBasis = '0';
+        below.style.flex = `${newBelow / total} 1 0`;
+        below.style.flexBasis = '0';
       }
 
       function onMouseUp() {
@@ -3668,6 +4190,14 @@ function initPanelDividers() {
       document.addEventListener('mousemove', onMouseMove);
       document.addEventListener('mouseup', onMouseUp);
     });
+
+    divider.addEventListener('dblclick', () => {
+      document.querySelectorAll('.sv-panel.panel-open').forEach(p => {
+        p.style.flex = '';
+        p.style.flexBasis = '';
+      });
+      savePanelOrder();
+    });
   }
 }
 
@@ -3677,8 +4207,8 @@ function savePanelOrder() {
   const heights = {};
   for (const name of order) {
     const panel = document.querySelector(`.sv-panel[data-panel="${name}"]`);
-    if (panel && panel.style.flexBasis && panel.style.flexBasis !== '') {
-      heights[name] = panel.style.flexBasis;
+    if (panel && panel.style.flex && panel.style.flex !== '') {
+      heights[name] = panel.style.flex;
     }
   }
   localStorage.setItem('sv_panel_order', JSON.stringify(order));
@@ -3694,6 +4224,12 @@ function restorePanelOrder() {
     // Migrate old panel names: 'agents' and 'coordinator' -> 'operations'
     order = order.filter(n => n !== 'agents' && n !== 'coordinator');
     if (!order.includes('operations')) order.splice(1, 0, 'operations'); // insert after approvals
+    if (!order.includes('pensive')) order.push('pensive'); // add new panel if missing from saved order
+    // Ensure any new panels not in saved order get appended (future-proof)
+    const allPanels = [...document.querySelectorAll('.sv-panel[data-panel]')].map(p => p.dataset.panel);
+    for (const name of allPanels) {
+      if (!order.includes(name)) order.push(name);
+    }
     openPanels = openPanels.map(n => (n === 'agents' || n === 'coordinator') ? 'operations' : n);
     // Deduplicate
     openPanels = [...new Set(openPanels)];
@@ -3720,7 +4256,7 @@ function restorePanelOrder() {
       if (toggle) toggle.innerHTML = '&#9660;';
       if (heights[name]) {
         const panel = document.querySelector(`.sv-panel[data-panel="${name}"]`);
-        if (panel) { panel.style.flex = `0 0 ${heights[name]}`; panel.style.flexBasis = heights[name]; }
+        if (panel) { panel.style.flex = heights[name]; panel.style.flexBasis = '0'; }
       }
     }
   } catch(e) {}
@@ -3858,13 +4394,13 @@ function updateApprovalsBadge() {
     if (files.length > 0) sendFile(files[0]);
   });
 
-  // Ctrl+V paste with file in clipboard
+  // Ctrl+V paste with file in clipboard (skip plain text blobs from iOS Safari)
   document.addEventListener('paste', function(e) {
     if (!activeTerminalId) return;
     const items = e.clipboardData && e.clipboardData.items;
     if (!items) return;
     for (const item of items) {
-      if (item.kind === 'file') {
+      if (item.kind === 'file' && !item.type.startsWith('text/plain')) {
         e.preventDefault();
         sendFile(item.getAsFile());
         return;
@@ -3881,6 +4417,203 @@ restorePanelOrder();
 initPanelDrag();
 initPanelDividers();
 fetchAllProjects();
+
+/* ── PII Scrubbing Panel ─────────────────────────────── */
+let piiConfigState = null; // in-memory working copy
+
+function onPiiEnabledChange() {
+  const enabled = document.getElementById('piiEnabled').checked;
+  const track = document.getElementById('piiEnabledTrack');
+  const thumb = document.getElementById('piiEnabledThumb');
+  const badge = document.getElementById('piiConfigBadge');
+  track.style.background = enabled ? 'var(--green)' : '#444';
+  thumb.style.transform = enabled ? 'translateX(20px)' : 'translateX(0)';
+  badge.style.display = enabled ? 'inline-block' : 'none';
+}
+
+function applyPiiConfig(cfg) {
+  piiConfigState = cfg;
+  // Enabled toggle
+  const enabledCb = document.getElementById('piiEnabled');
+  enabledCb.checked = !!cfg.enabled;
+  onPiiEnabledChange();
+  // Path
+  const pathEl = document.querySelector(`input[name="piiPath"][value="${cfg.path || 'mcp'}"]`);
+  if (pathEl) pathEl.checked = true;
+  // Mode
+  const modeEl = document.querySelector(`input[name="piiMode"][value="${cfg.mode || 'structured'}"]`);
+  if (modeEl) modeEl.checked = true;
+  // Types
+  const types = cfg.types || {};
+  document.getElementById('piiTypeIPv4').checked = !!types.IPv4;
+  document.getElementById('piiTypeIPv6').checked = !!types.IPv6;
+  document.getElementById('piiTypeMAC').checked = !!types.MAC;
+  document.getElementById('piiTypeEMAIL').checked = !!types.EMAIL;
+  document.getElementById('piiTypeHOST').checked = !!types.HOST;
+  document.getElementById('piiTypePHONE').checked = !!types.PHONE;
+  document.getElementById('piiTypeSSN').checked = types.SSN !== false;
+  document.getElementById('piiTypeNAME').checked = types.NAME !== false;
+  // Projects
+  renderPiiProjects(cfg.projects || {});
+}
+
+function renderPiiProjects(projects) {
+  const list = document.getElementById('piiProjectList');
+  const entries = Object.entries(projects);
+  if (entries.length === 0) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--muted);">No per-project overrides</div>';
+    return;
+  }
+  list.innerHTML = entries.map(([name, ov]) => {
+    const types = Object.entries(ov.types || {}).filter(([,v]) => v).map(([k]) => k).join(', ') || 'none';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,0.2);border-radius:4px;padding:5px 8px;">
+      <div>
+        <span style="font-size:12px;font-weight:600;color:var(--text);">${name}</span>
+        <span style="font-size:10px;color:var(--muted);margin-left:6px;">${ov.path ? ov.path + ' · ' : ''}${ov.mode || 'structured'} · ${types}</span>
+      </div>
+      <button onclick="removePiiProject('${name}')" style="padding:2px 6px;background:#333;border:none;border-radius:3px;color:var(--red);font-size:11px;cursor:pointer;">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function removePiiProject(name) {
+  if (!piiConfigState) return;
+  const projects = Object.assign({}, piiConfigState.projects || {});
+  delete projects[name];
+  piiConfigState.projects = projects;
+  renderPiiProjects(projects);
+}
+
+function addPiiProjectOverride() {
+  const name = document.getElementById('piiNewProjectName').value.trim();
+  if (!name) { alert('Enter a project name'); return; }
+  if (!piiConfigState) piiConfigState = { enabled: false, mode: 'structured', types: {}, projects: {} };
+  const projects = Object.assign({}, piiConfigState.projects || {});
+  const projPath = document.getElementById('piiNPPath').value;
+  projects[name] = {
+    ...(projPath ? { path: projPath } : {}),
+    mode: document.getElementById('piiNewProjMode').value,
+    types: {
+      IPv4: document.getElementById('piiNPIPv4').checked,
+      IPv6: document.getElementById('piiNPIPv6').checked,
+      MAC:  document.getElementById('piiNPMAC').checked,
+      EMAIL: document.getElementById('piiNPEMAIL').checked,
+      HOST: document.getElementById('piiNPHOST').checked,
+      PHONE: document.getElementById('piiNPPHONE').checked,
+      SSN:   document.getElementById('piiNPSSN')?.checked ?? true,
+      NAME:  document.getElementById('piiNPNAME')?.checked ?? true,
+    }
+  };
+  piiConfigState.projects = projects;
+  renderPiiProjects(projects);
+  document.getElementById('piiNewProjectName').value = '';
+  document.getElementById('piiAddProjectForm').style.display = 'none';
+}
+
+function buildPiiConfigFromForm() {
+  const pathEl = document.querySelector('input[name="piiPath"]:checked');
+  const modeEl = document.querySelector('input[name="piiMode"]:checked');
+  return {
+    enabled: document.getElementById('piiEnabled').checked,
+    path: pathEl ? pathEl.value : 'mcp',
+    mode: modeEl ? modeEl.value : 'structured',
+    types: {
+      IPv4:  document.getElementById('piiTypeIPv4').checked,
+      IPv6:  document.getElementById('piiTypeIPv6').checked,
+      MAC:   document.getElementById('piiTypeMAC').checked,
+      EMAIL: document.getElementById('piiTypeEMAIL').checked,
+      HOST:  document.getElementById('piiTypeHOST').checked,
+      PHONE: document.getElementById('piiTypePHONE').checked,
+      SSN:   document.getElementById('piiTypeSSN').checked,
+      NAME:  document.getElementById('piiTypeNAME').checked,
+    },
+    projects: (piiConfigState && piiConfigState.projects) ? piiConfigState.projects : {},
+  };
+}
+
+async function fetchPiiConfig() {
+  try {
+    const r = await fetch('/api/pii/config');
+    if (r.ok) applyPiiConfig(await r.json());
+  } catch {}
+}
+
+async function fetchPiiStats() {
+  const el = document.getElementById('piiSessionsTable');
+  try {
+    const r = await fetch('/api/pii/stats');
+    if (!r.ok) { el.textContent = 'Failed to load'; return; }
+    const data = await r.json();
+    if (!data.sessions || data.sessions.length === 0) {
+      el.innerHTML = '<span style="color:var(--muted)">No active sessions</span>';
+      return;
+    }
+    const rows = data.sessions.map(s => {
+      const total = Object.values(s.counters || {}).reduce((a, b) => a + b, 0);
+      const types = Object.entries(s.counters || {}).filter(([,v]) => v > 0)
+        .map(([k, v]) => `<span style="color:var(--blue)">${k}</span>:${v}`).join(' ');
+      const ago = s.lastUsed ? Math.round((Date.now() - new Date(s.lastUsed)) / 1000) + 's ago' : '';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 6px;background:rgba(0,0,0,0.2);border-radius:3px;margin-bottom:3px;">
+        <div>
+          <span style="font-family:monospace;font-size:11px;color:var(--text)">${s.sessionId}</span>
+          <span style="font-size:10px;color:var(--muted);margin-left:6px;">${ago}</span>
+        </div>
+        <div style="font-size:10px;">${types || '<span style="color:var(--muted)">none</span>'} <span style="color:var(--muted)">(${total})</span></div>
+      </div>`;
+    }).join('');
+    el.innerHTML = rows;
+  } catch {
+    el.textContent = 'Error loading stats';
+  }
+}
+
+async function savePiiConfig() {
+  const cfg = buildPiiConfigFromForm();
+  try {
+    const r = await fetch('/api/pii/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg),
+    });
+    const status = document.getElementById('piiSaveStatus');
+    if (r.ok) {
+      piiConfigState = cfg;
+      status.textContent = 'Saved';
+      status.style.color = 'var(--green)';
+      status.style.display = 'inline-block';
+      setTimeout(() => { status.style.display = 'none'; }, 2500);
+    } else {
+      const err = await r.json().catch(() => ({ error: r.statusText }));
+      status.textContent = 'Error: ' + (err.error || r.statusText);
+      status.style.color = 'var(--red)';
+      status.style.display = 'inline-block';
+      setTimeout(() => { status.style.display = 'none'; }, 4000);
+    }
+  } catch (e) {
+    alert('Save failed: ' + e.message);
+  }
+}
+
+// Load config when panel is first opened — patch togglePanel behavior
+// Override for piiConfig panel to lazy-load data
+(function() {
+  const origToggle = window.togglePanel;
+  window.togglePanel = function(name) {
+    origToggle(name);
+    if (name === 'piiConfig' && panelState.piiConfig) {
+      fetchPiiConfig();
+      fetchPiiStats();
+    }
+  };
+})();
+
+// Poll stats every 30s when panel is open
+setInterval(() => {
+  if (panelState.piiConfig) fetchPiiStats();
+}, 30000);
+
+// Always fetch PII config on page load (for badge + initial state)
+fetchPiiConfig();
 
 connect();
 </script>

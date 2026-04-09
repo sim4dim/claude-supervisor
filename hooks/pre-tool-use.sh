@@ -55,6 +55,36 @@ defer_approval() {
     exit 0
 }
 
+# ─── PII scrub mode: redirect native tools to MCP equivalents ──────────────
+# Check central PII config — no env var needed, dashboard controls everything
+# EXEMPT: the supervisor project itself (control plane must never self-block)
+PII_ACTIVE=""
+CURRENT_PROJECT=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
+if [[ "$CURRENT_PROJECT" != "claude-supervisor" && "$TOOL_NAME" =~ ^(Read|Glob|Grep|Bash|Write|Edit)$ ]]; then
+    PII_CONFIG_FILE="$HOME/projects/claude-supervisor/data/pii-config.json"
+    if [ -f "$PII_CONFIG_FILE" ]; then
+        # Project listed in overrides = enabled for that project, even if global is off
+        PII_GLOBAL=$(jq -r '.enabled // false' "$PII_CONFIG_FILE" 2>/dev/null)
+        PII_PROJECT_EXISTS=$(jq -r --arg p "$CURRENT_PROJECT" 'if .projects[$p] then "true" else "false" end' "$PII_CONFIG_FILE" 2>/dev/null)
+        PII_PATH=$(jq -r --arg p "$CURRENT_PROJECT" '(.projects[$p].path // .path) // "mcp"' "$PII_CONFIG_FILE" 2>/dev/null)
+        if [[ "$PII_GLOBAL" == "true" || "$PII_PROJECT_EXISTS" == "true" ]] && [[ "$PII_PATH" == "mcp" || "$PII_PATH" == "both" ]]; then
+            PII_ACTIVE="1"
+        fi
+    fi
+fi
+
+if [[ -n "$PII_ACTIVE" && "$TOOL_NAME" =~ ^(Read|Glob|Grep|Bash|Write|Edit)$ ]]; then
+    PII_MCP="mcp__pii__$(echo "$TOOL_NAME" | tr '[:upper:]' '[:lower:]')"
+    jq -n --arg mcp "$PII_MCP" --arg tool "$TOOL_NAME" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: ("PII scrub active — use " + $mcp + " instead of " + $tool)
+      }
+    }'
+    exit 0
+fi
+
 # ─── Auto-approve rules (never hit the server) ──────────────────────────────
 
 # Read-only tools: always safe (read storm tracked server-side via PostToolUse)

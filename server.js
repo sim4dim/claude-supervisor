@@ -26,6 +26,8 @@ import { resolve, dirname, basename, join } from "path";
 import { fileURLToPath } from "url";
 import os from "os";
 import pty from "node-pty";
+import { initPensive, remember, recall, supersede, runDecay, getStats, updateCompactForm } from "./pensive.js";
+import { getOrCreateSanitizer, purgeOldTables } from "./pii-sanitizer.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SUPERVISOR_VERSION = (() => {
@@ -40,6 +42,7 @@ const SUPERVISOR_VERSION = (() => {
 const STARTUP_COMMIT = (() => {
   try { return execFileSync("git", ["rev-parse", "HEAD"], { cwd: __dirname, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return ""; }
 })();
+const PII_SCRUB_ENABLED = process.env.PII_SCRUB_ENABLED === "1";
 const PORT = process.env.SUPERVISOR_PORT || 3847;
 const devNull = openSync("/dev/null", "r");
 
@@ -855,6 +858,7 @@ function runEvalWithModel(prompt, model) {
       "--system-prompt", supervisorPolicy,
       "--model", model,
       "--max-turns", "1",
+      "--effort", "medium",
     ];
 
     // Minimal env: strip MCP configs to avoid slow server startup in eval subprocess
@@ -1502,6 +1506,7 @@ async function evaluateQuestionWithAI(question) {
       "--output-format", "json",
       "--model", process.env.SUPERVISOR_QUESTION_MODEL || "claude-sonnet-4-20250514",
       "--max-turns", "1",
+      "--effort", "medium",
     ];
 
     const evalEnv = { ...process.env, CLAUDECODE: "" };
@@ -1626,6 +1631,15 @@ app.use((req, res, next) => {
     return res.status(401).json({ error: "Invalid hook token" });
   }
 
+  // Pensive routes accept both hook token and cookie auth
+  if (req.path.startsWith("/api/pensive/")) {
+    const auth = req.headers.authorization;
+    if (auth === `Bearer ${HOOK_TOKEN}`) return next();
+    const cookie = parseCookieHeader(req.headers.cookie || "");
+    if (verifySession(cookie.supervisor_session)) return next();
+    return res.status(401).json({ error: "Authentication required" });
+  }
+
   // All other routes use cookie auth
   const cookie = parseCookieHeader(req.headers.cookie || "");
   if (verifySession(cookie.supervisor_session)) return next();
@@ -1634,6 +1648,110 @@ app.use((req, res, next) => {
   const wantsJson = req.headers.accept?.includes("application/json") || req.path.startsWith("/api/");
   if (wantsJson) return res.status(401).json({ error: "Authentication required" });
   return res.redirect("/login");
+});
+
+// ── Pensive LLM Compression ─────────────────────────────────────────────────
+
+const PENSIVE_COMPRESS_PROMPT = `Compress this memory into shorthand notation — a dense format for LLM consumption.
+
+Rules:
+- Use key=val pairs separated by |
+- Prefix with type tag (INFRA:, DISC:, CONV:, PREF:, DEC:, ERR:, FACT:)
+- Strip all filler, articles, redundant words
+- Preserve ALL technical details: IPs, ports, names, numbers, versions
+- Keep negations and conditions explicit
+- Target: 20-40 tokens max
+- Do NOT add information not in the original
+
+Examples:
+Input: "PostgreSQL on 10.0.1.5 has 100 connection limit, discovered during March load test"
+Output: "INFRA: pg@10.0.1.5 max_conn=100 | found:load_test_mar | fail:pool_exhaust→timeout"
+
+Input: "Chose JWT over session cookies because the auth service is stateless and we need cross-domain support"
+Output: "DEC: jwt>session_cookies | why:stateless_auth+cross_domain"
+
+Input: "ESPHome OTA is unreliable, user handles compile and push via USB from host machine"
+Output: "CONV: esphome ota=unreliable | workflow:verify_yaml_only→user_usb_push"
+
+Memory type: {type}
+Memory content: {content}
+
+Output ONLY the compressed form, nothing else.`;
+
+function compressWithLLM(memoryId, content, type) {
+  if (!content || content.length < 30) return;
+  const prompt = PENSIVE_COMPRESS_PROMPT
+    .replace("{type}", type || "discovery")
+    .replace("{content}", content);
+  execFile(
+    CLAUDE_BINARY,
+    ["-p", prompt, "--model", SUPERVISOR_FAST_MODEL],
+    { timeout: 10000 },
+    (err, stdout) => {
+      if (err || !stdout || !stdout.trim()) return;
+      updateCompactForm(memoryId, stdout.trim());
+      log("info", `Pensive: compressed memory ${memoryId}`);
+    }
+  );
+}
+
+// ── Pensive Memory Endpoints ────────────────────────────────────────────────
+
+app.get("/api/pensive/memories", (req, res) => {
+  try {
+    const { query, project, scope, limit, startup, type } = req.query;
+    const results = recall({
+      query,
+      project,
+      scope,
+      type,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      startup: startup === "true" || startup === "1",
+    });
+    res.json({ memories: results });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/pensive/remember", express.json(), (req, res) => {
+  try {
+    const { content, type, scope, project, tier, content_type, source, tags } = req.body;
+    if (!content) return res.status(400).json({ error: "content is required" });
+    const result = remember({ content, type, scope, project, tier, content_type, source, tags });
+    if (result.action === "created") compressWithLLM(result.id, content, type);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/pensive/stats", (req, res) => {
+  try {
+    res.json(getStats());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete("/api/pensive/memories/:id", (req, res) => {
+  try {
+    const result = supersede(req.params.id, null);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put("/api/pensive/memories/:id", express.json(), (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ error: "content is required" });
+    const result = supersede(req.params.id, content);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Hook Endpoints ──────────────────────────────────────────────────────────
@@ -2171,7 +2289,7 @@ function createDtachSession(project, projectDir, cols, rows, sessionId) {
   }
   const child = spawn("dtach", args, {
     cwd: projectDir,
-    env: { ...process.env, TERM: "xterm-256color", CLAUDECODE: "", CLAUDE_CODE_TASK_LIST_ID: `task-${project}`, CLAUDE_CODE_NO_FLICKER: "1", MCP_CONNECTION_NONBLOCKING: "true" },
+    env: { ...process.env, TERM: "xterm-256color", CLAUDECODE: "", CLAUDE_CODE_TASK_LIST_ID: `task-${project}`, MCP_CONNECTION_NONBLOCKING: "true" },
     stdio: "ignore",
     detached: true,
   });
@@ -2968,6 +3086,137 @@ app.post("/api/reload-policy", async (req, res) => {
   res.json({ status: "reloaded" });
 });
 
+// ─── PII Config Endpoints ─────────────────────────────────────────────────
+function loadPiiConfig() {
+  try {
+    return JSON.parse(readFileSync(join(__dirname, 'data', 'pii-config.json'), 'utf8'));
+  } catch {
+    return { enabled: false, path: 'mcp', mode: 'structured', types: { IPv4: true, IPv6: true, MAC: true, EMAIL: true, HOST: true, PHONE: true, SSN: true, NAME: true }, projects: {} };
+  }
+}
+
+app.get("/api/pii/config", (req, res) => {
+  res.json(loadPiiConfig());
+});
+
+app.post("/api/pii/config", express.json(), (req, res) => {
+  const cfg = req.body;
+  if (!cfg || typeof cfg !== 'object') {
+    return res.status(400).json({ error: "Invalid config body" });
+  }
+  if (cfg.path !== undefined && !['mcp', 'api', 'both'].includes(cfg.path)) {
+    return res.status(400).json({ error: "path must be 'mcp', 'api', or 'both'" });
+  }
+  if (cfg.mode !== undefined && cfg.mode !== 'token' && cfg.mode !== 'structured') {
+    return res.status(400).json({ error: "mode must be 'token' or 'structured'" });
+  }
+  if (cfg.types !== undefined) {
+    if (typeof cfg.types !== 'object' || Array.isArray(cfg.types)) {
+      return res.status(400).json({ error: "types must be an object" });
+    }
+    for (const [k, v] of Object.entries(cfg.types)) {
+      if (typeof v !== 'boolean') {
+        return res.status(400).json({ error: `types.${k} must be a boolean` });
+      }
+    }
+  }
+  try {
+    writeFileSync(join(__dirname, 'data', 'pii-config.json'), JSON.stringify(cfg, null, 2));
+    log('ok', 'PII config updated', { enabled: cfg.enabled, mode: cfg.mode });
+
+    // Auto-deploy/remove .mcp.json to all Claude projects
+    const projectsRoot = join(__dirname, '..');
+    try {
+      const dirs = readdirSync(projectsRoot);
+      let deployed = 0;
+      for (const dir of dirs) {
+        if (dir === 'claude-supervisor') continue; // supervisor is exempt
+        const claudeDir = join(projectsRoot, dir, '.claude');
+        const mcpFile = join(projectsRoot, dir, '.mcp.json');
+        if (!existsSync(claudeDir)) continue;
+
+        if (cfg.enabled) {
+          const mcpPayload = {
+            mcpServers: {
+              pii: {
+                command: "node",
+                args: [join(__dirname, "mcp-pii-server.js")],
+                env: { PII_SESSION_ID: dir }
+              }
+            }
+          };
+          let existing = {};
+          try { existing = JSON.parse(readFileSync(mcpFile, 'utf8')); } catch {}
+          existing.mcpServers = { ...existing.mcpServers, ...mcpPayload.mcpServers };
+          writeFileSync(mcpFile, JSON.stringify(existing, null, 2));
+          deployed++;
+        } else {
+          try {
+            const existing = JSON.parse(readFileSync(mcpFile, 'utf8'));
+            if (existing.mcpServers?.pii) {
+              delete existing.mcpServers.pii;
+              if (Object.keys(existing.mcpServers).length === 0) {
+                writeFileSync(mcpFile, '{"mcpServers":{}}');
+              } else {
+                writeFileSync(mcpFile, JSON.stringify(existing, null, 2));
+              }
+              deployed++;
+            }
+          } catch {}
+        }
+      }
+      if (deployed > 0) log("info", `PII: ${cfg.enabled ? 'deployed' : 'removed'} .mcp.json in ${deployed} projects`);
+    } catch (e) {
+      log("warn", `PII .mcp.json deploy failed: ${e.message}`);
+    }
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/pii/stats", (req, res) => {
+  const tablesDir = join(__dirname, 'data', 'pii-tables');
+  try {
+    const files = readdirSync(tablesDir).filter(f => f.endsWith('.json'));
+    const sessions = files.map(f => {
+      try {
+        const data = JSON.parse(readFileSync(join(tablesDir, f), 'utf8'));
+        return {
+          sessionId: data.sessionId,
+          created: data.created,
+          lastUsed: data.lastUsed,
+          counters: data.counters || {},
+          mappingCount: Array.isArray(data.mappings) ? data.mappings.length : 0,
+        };
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+    res.json({ count: sessions.length, sessions });
+  } catch (e) {
+    if (e.code === 'ENOENT') return res.json({ count: 0, sessions: [] });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/pii/lookup/:sessionId", (req, res) => {
+  const { sessionId } = req.params;
+  // Sanitize sessionId to prevent path traversal
+  if (!/^[\w\-]+$/.test(sessionId)) {
+    return res.status(400).json({ error: "Invalid sessionId" });
+  }
+  const filePath = join(__dirname, 'data', 'pii-tables', `${sessionId}.json`);
+  try {
+    const data = JSON.parse(readFileSync(filePath, 'utf8'));
+    res.json(data);
+  } catch (e) {
+    if (e.code === 'ENOENT') return res.status(404).json({ error: "Session not found" });
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── Version Endpoints ────────────────────────────────────────────────────
 app.get("/api/version/pending", (req, res) => {
   if (!STARTUP_COMMIT) return res.json({ changes: [], behindBy: 0, startupCommit: "" });
@@ -3093,11 +3342,32 @@ app.use("/v1", express.raw({ type: "*/*", limit: "50mb" }), async (req, res) => 
     }
   }
 
+  // PII scrubbing — only POST /v1/messages with a body, when API path is active
+  let forwardBody = req.method !== "GET" && req.method !== "HEAD" && req.body?.length ? req.body : undefined;
+  const piiCfg = forwardBody && req.method === "POST" && req.path === "/messages" ? loadPiiConfig() : null;
+  const piiApiActive = piiCfg?.enabled && (piiCfg.path === "api" || piiCfg.path === "both");
+  if (piiApiActive) {
+    try {
+      const bodyObj = JSON.parse(forwardBody.toString("utf-8"));
+      const sanitizer = getOrCreateSanitizer(claudeSessionId || "anonymous");
+      sanitizer.scrubRequestBody(bodyObj);
+      forwardBody = Buffer.from(JSON.stringify(bodyObj), "utf-8");
+      forwardHeaders["content-length"] = String(forwardBody.length);
+      const summary = sanitizer.summary();
+      if (summary && !summary.includes("nothing")) {
+        log("info", `API proxy: ${summary}`, { sessionId: claudeSessionId });
+        sanitizer.save();
+      }
+    } catch (_parseErr) {
+      // JSON parse failed — forward original body unchanged
+    }
+  }
+
   try {
     const upstream = await fetch(targetUrl, {
       method: req.method,
       headers: forwardHeaders,
-      body: req.method !== "GET" && req.method !== "HEAD" && req.body?.length ? req.body : undefined,
+      body: forwardBody,
       // duplex required for streaming request bodies in Node 18+
       duplex: "half",
     });
@@ -4310,6 +4580,26 @@ function publishCoordinatorResponse(requestId, request, result) {
   // Broadcast to web UI
   broadcast({ type: "coordinator_response", id: requestId, ...result });
 
+  // Auto-persist completed coordinator responses to Pensive as world-scoped memories
+  if (result.status === "completed" && result.result && result.result.length >= 10) {
+    try {
+      const description = request?.description || requestId;
+      const snippet = result.result.slice(0, 500);
+      const finding = `Coordinator response [${request?.type || "research"} — ${description.slice(0, 120)}]: ${snippet}`;
+      const memResult = remember({
+        content: finding,
+        type: "coordinator_response",
+        scope: "world",
+        project: request?.target_project || request?.from?.project,
+        source: "coordinator",
+        agent_id: requestId,
+      });
+      if (memResult.action === "created") compressWithLLM(memResult.id, finding, "coordinator_response");
+    } catch (e) {
+      log("warn", `Pensive coordinator auto-capture failed: ${e.message}`);
+    }
+  }
+
   // Archive after a delay
   setTimeout(() => {
     mqttPublish(["-r", "-n", "-t", topic]);
@@ -4608,6 +4898,23 @@ function mqttLineHandler(line) {
     if (agentMessages.length > MAX_AGENT_MESSAGES) agentMessages.shift();
     broadcast({ type: "agent_message", ...messageObj });
 
+    // Auto-persist discoveries to Pensive
+    if (msgType === "discovery" && safePayload.finding && safePayload.finding.length >= 10) {
+      try {
+        const memResult = remember({
+          content: safePayload.finding,
+          type: "discovery",
+          scope: "project",
+          project,
+          source: "mqtt",
+          agent_id: taskId,
+        });
+        if (memResult.action === "created") compressWithLLM(memResult.id, safePayload.finding, "discovery");
+      } catch (e) {
+        log("warn", `Pensive auto-capture failed: ${e.message}`);
+      }
+    }
+
     // Auto-register Task spawns as coordinator entries.
     // Only hook messages (hook: true) create/complete entries — deterministic ID matching.
     // Agent sv pub messages (no hook flag) are routed to entries via exact coordId or alias lookup.
@@ -4827,6 +5134,14 @@ await loadPolicy();
 checkClaudeCli();
 syncProjectHooks();
 recoverDtachSessions();
+// Initialize Pensive memory system
+const pensiveStatus = initPensive();
+if (pensiveStatus.enabled) {
+  log("info", "Pensive memory system initialized");
+} else {
+  log("warn", `Pensive disabled: ${pensiveStatus.reason}`);
+}
+
 startMqttSubscriber();
 startMqttBackupSubscriber();
 
@@ -4902,6 +5217,18 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1000);
+
+// Pensive memory decay sweep — every 6 hours
+setInterval(() => {
+  try {
+    const result = runDecay();
+    if (result.archived > 0 || result.deleted > 0) {
+      log("info", `Pensive decay sweep: ${result.archived} archived, ${result.deleted} deleted`);
+    }
+  } catch (e) {
+    log("warn", `Pensive decay sweep failed: ${e.message}`);
+  }
+}, 6 * 60 * 60 * 1000);
 
 // Clean up stale delegation trackers every 10 minutes
 // Trackers are kept for logging/hints only; enforcement is context-% based
@@ -5053,8 +5380,14 @@ try {
 // Old inline UI removed — now served from web-ui.html
 // To revert: replace the readFile above with the old const WEB_UI = `...` template
 
+if (PII_SCRUB_ENABLED) {
+  const purged = purgeOldTables();
+  if (purged > 0) log("info", `PII sanitizer: purged ${purged} expired session tables`);
+}
+
 server.listen(PORT, "0.0.0.0", () => {
   log("info", `Supervisor ${SUPERVISOR_VERSION} running on http://0.0.0.0:${PORT} (mode=${SUPERVISOR_MODE})`);
+  if (PII_SCRUB_ENABLED) log("info", "PII scrubbing enabled for /v1/messages requests");
   log("info", `AI eval backend: ${EVAL_BACKEND}${EVAL_BACKEND === 'ollama' ? ` (${OLLAMA_MODEL} default, ${OLLAMA_TRUSTED_MODELS.length} trusted models, at ${OLLAMA_URL})` : ''}`);
   if (AUTH_ENABLED) {
     log("info", "Auth enabled — dashboard requires password login");
