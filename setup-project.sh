@@ -200,6 +200,41 @@ PYSCRIPT
 #   setfacl -R -m u:$user:rX "$PROJECT_DIR" || true
 # done
 
+# Optional: enable PII scrubbing via .mcp.json
+if [ -t 0 ]; then
+  printf "Enable PII scrubbing for this project? (y/N) "
+  read -r PII_ANSWER
+  if [[ "$PII_ANSWER" =~ ^[Yy]$ ]]; then
+    MCP_FILE="$PROJECT_DIR/.mcp.json"
+    if [ -f "$MCP_FILE" ]; then
+      # Merge pii entry into existing .mcp.json
+      python3 -c "
+import json, sys
+with open('$MCP_FILE') as f:
+    mcp = json.load(f)
+mcp.setdefault('mcpServers', {})['pii'] = {
+    'command': 'node',
+    'args': ['$SCRIPT_DIR/mcp-pii-server.js'],
+    'env': {'PII_SESSION_ID': 'default'}
+}
+with open('$MCP_FILE', 'w') as f:
+    json.dump(mcp, f, indent=2)
+print('Updated $MCP_FILE with PII MCP server entry')
+"
+    else
+      # Create fresh .mcp.json
+      python3 -c "
+import json
+mcp = {'mcpServers': {'pii': {'command': 'node', 'args': ['$SCRIPT_DIR/mcp-pii-server.js'], 'env': {'PII_SESSION_ID': 'default'}}}}
+with open('$MCP_FILE', 'w') as f:
+    json.dump(mcp, f, indent=2)
+print('Created $MCP_FILE with PII MCP server entry')
+"
+    fi
+    echo "PII scrubbing enabled. Restart the Claude session to activate."
+  fi
+fi
+
 echo ""
 echo "Done! Project set up for supervisor on port $PORT"
 echo "  Dashboard: http://localhost:$PORT"

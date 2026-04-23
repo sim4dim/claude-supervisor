@@ -134,25 +134,106 @@ const LOGIN_PAGE = `<!DOCTYPE html>
 
 // ─── Supervisor AI Configuration ────────────────────────────────────────────
 
-const SUPERVISOR_MODE = process.env.SUPERVISOR_MODE || "auto";
 const SUPERVISOR_FAST_MODEL = process.env.SUPERVISOR_FAST_MODEL || "claude-haiku-4-5-20251001";
 const SUPERVISOR_MODEL = process.env.SUPERVISOR_MODEL || "claude-sonnet-4-20250514";
 const EVAL_ESCALATION_THRESHOLD = parseInt(process.env.SUPERVISOR_EVAL_ESCALATION_THRESHOLD || "70");
-const SUPERVISOR_CONFIDENCE_THRESHOLD = parseFloat(
-  process.env.SUPERVISOR_CONFIDENCE_THRESHOLD || "0.8"
-);
-const SUPERVISOR_EVAL_TIMEOUT = parseInt(
-  process.env.SUPERVISOR_EVAL_TIMEOUT || "60000"
-);
-const SUPERVISOR_MAX_CONCURRENT = parseInt(
-  process.env.SUPERVISOR_MAX_CONCURRENT || "3"
-);
 const SUPERVISOR_POLICY_PATH =
   process.env.SUPERVISOR_POLICY_PATH || resolve(__dirname, "supervisor-policy.md");
-const EVAL_BACKEND = process.env.SUPERVISOR_EVAL_BACKEND || 'ollama';  // 'ollama' or 'claude'
-const OLLAMA_URL = process.env.SUPERVISOR_OLLAMA_URL || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.SUPERVISOR_OLLAMA_MODEL || 'mistral-nemo';
 const OLLAMA_TRUSTED_MODELS = (process.env.SUPERVISOR_OLLAMA_TRUSTED_MODELS || 'gpt-oss:20b,mistral-nemo:latest,mistral-nemo,gemma3:27b,phi4,phi4-mini,magistral,cogito:70b,llama3.3:70b,mistral-small3.1').split(',').map(s => s.trim());
+
+// ─── Mutable Eval Config (runtime-changeable via dashboard) ──────────────
+const EVAL_CONFIG_PATH = join(__dirname, 'data', 'eval-config.json');
+
+function loadEvalConfig() {
+  const defaults = {
+    mode: process.env.SUPERVISOR_MODE || "auto",
+    confidenceThreshold: parseFloat(process.env.SUPERVISOR_CONFIDENCE_THRESHOLD || "0.8"),
+    evalTimeout: parseInt(process.env.SUPERVISOR_EVAL_TIMEOUT || "60000", 10),
+    maxConcurrent: parseInt(process.env.SUPERVISOR_MAX_CONCURRENT || "3", 10),
+    evalBackend: process.env.SUPERVISOR_EVAL_BACKEND || 'ollama',
+    ollamaUrl: process.env.SUPERVISOR_OLLAMA_URL || 'http://localhost:11434',
+    ollamaModel: process.env.SUPERVISOR_OLLAMA_MODEL || 'mistral-nemo',
+  };
+  try {
+    const saved = JSON.parse(readFileSync(EVAL_CONFIG_PATH, 'utf-8'));
+    return { ...defaults, ...saved };
+  } catch {
+    return defaults;
+  }
+}
+
+function saveEvalConfig(config) {
+  writeFileSync(EVAL_CONFIG_PATH, JSON.stringify(config, null, 2));
+}
+
+const evalConfig = loadEvalConfig();
+
+// ─── Hook Rules (static reference for dashboard display) ─────────────────────
+const HOOK_RULES = {
+  autoApprovedTools: [
+    { pattern: "Read, Glob, Grep, LS", description: "Read-only file tools" },
+    { pattern: "Task, Agent", description: "Subagent delegation" },
+    { pattern: "WebSearch, WebFetch", description: "Web lookup (read-only)" },
+    { pattern: "mcp__*", description: "All MCP tool calls" },
+    { pattern: "Write, Edit, NotebookEdit", description: "File writes (after sensitive-file check)" },
+  ],
+  autoDenied: [
+    { pattern: "rm -rf /, dd if=, mkfs", description: "Destructive system commands" },
+    { pattern: "curl/wget | sh", description: "Download-and-execute" },
+    { pattern: "> /etc/, tee /etc/", description: "Writing to system paths" },
+    { pattern: "sudo, su (local only)", description: "Local privilege escalation (SSH sudo allowed)" },
+    { pattern: "git push --force main/master", description: "Force push to main branch" },
+    { pattern: "bind 0.0.0.0", description: "Network listener on all interfaces" },
+    { pattern: "npm -g install", description: "Global npm install" },
+    { pattern: "docker --privileged", description: "Dangerous Docker flags" },
+    { pattern: "| sh, | bash", description: "Any pipe to shell" },
+    { pattern: ".env, secrets, .git/", description: "Editing sensitive files" },
+  ],
+  autoApprovedBash: [
+    { category: "Read-only CLI", commands: "ls, cat, head, tail, wc, find, grep, echo, pwd, stat, file, diff, sort, jq, sed, awk, cut, tr, ps, env, df, du, free, uptime" },
+    { category: "Git operations", commands: "All git subcommands (force-push to main already denied)" },
+    { category: "Package managers", commands: "npm, yarn, pnpm, pip, cargo, go (safe subcommands)" },
+    { category: "Build tools", commands: "make, cmake, ninja, meson, gradle, mvn, node, bun" },
+    { category: "Python / Go / Rust", commands: "python, pytest, go test/build, cargo test/build" },
+    { category: "SSH / remote", commands: "ssh, scp, rsync, sshpass" },
+    { category: "Docker (safe)", commands: "docker, docker-compose (dangerous flags already denied)" },
+    { category: "curl / wget", commands: "All HTTP requests (pipe-to-shell already denied)" },
+    { category: "Shell execution", commands: "bash/sh scripts, shell control flow, source" },
+    { category: "File management", commands: "cp, mv, rm, ln, chmod, chown (rm -rf / already denied)" },
+    { category: "MQTT / sv", commands: "mosquitto_pub/sub, sv helper (always approved)" },
+    { category: "Archives / encoding", commands: "tar, zip, base64, openssl, gzip, xz" },
+    { category: "Database", commands: "sqlite3" },
+    { category: "VM management", commands: "virsh, qemu" },
+  ],
+  dynamicApprovals: [], // populated at runtime from dynamic-approvals.sh
+};
+
+function loadDynamicApprovals() {
+  const filePath = join(__dirname, '.claude', 'hooks', 'dynamic-approvals.sh');
+  try {
+    const content = readFileSync(filePath, 'utf8');
+    const entries = [];
+    // Match comment blocks followed by if/grep patterns
+    // Pattern: # Pattern: <cmd>\n# Learned: <date> | Occurrences: <n> | Avg confidence: <pct>%
+    const blockRe = /# Pattern: (\S+)\n# Learned: (\S+) \| Occurrences: (\d+) \| Avg confidence: (\d+)%/g;
+    let m;
+    while ((m = blockRe.exec(content)) !== null) {
+      entries.push({
+        command: m[1],
+        learnedDate: m[2].split('T')[0], // keep only date portion
+        occurrences: parseInt(m[3], 10),
+        confidence: parseInt(m[4], 10) / 100,
+      });
+    }
+    HOOK_RULES.dynamicApprovals = entries;
+  } catch (e) {
+    // File may not exist in some environments — that's fine
+    HOOK_RULES.dynamicApprovals = [];
+  }
+}
+
+loadDynamicApprovals();
+setInterval(loadDynamicApprovals, 300000);
 
 // ─── Peer Supervisors (for cross-instance doc sharing) ──────────────────────
 // Format: "name=url,name=url" e.g. "user1=http://localhost:3847,user2=http://localhost:3848"
@@ -203,6 +284,8 @@ const MAX_LOGS = 500;
 const agentMessages = [];         // Bounded buffer of recent MQTT agent messages
 const MAX_AGENT_MESSAGES = 200;
 const teamChatMessages = new Map(); // Cross-instance human chat: project -> messages[]
+
+let ollamaHealth = { status: 'unknown', models: [], vramUsed: 0, lastCheck: null };
 
 // ─── Coordinator / broker ────────────────────────────────────────────────────
 const COORDINATOR_ENABLED = process.env.SUPERVISOR_COORDINATOR !== "false";
@@ -510,10 +593,10 @@ async function loadPolicy() {
 }
 
 function checkClaudeCli() {
-  if (SUPERVISOR_MODE === "manual") return;
+  if (evalConfig.mode === "manual") return;
   try {
     statSync(CLAUDE_BINARY);
-    log("info", `AI supervisor active (mode=${SUPERVISOR_MODE}, fast=${SUPERVISOR_FAST_MODEL}, full=${SUPERVISOR_MODEL}, escalation=${EVAL_ESCALATION_THRESHOLD}%, threshold=${SUPERVISOR_CONFIDENCE_THRESHOLD})`);
+    log("info", `AI supervisor active (mode=${evalConfig.mode}, fast=${SUPERVISOR_FAST_MODEL}, full=${SUPERVISOR_MODEL}, escalation=${EVAL_ESCALATION_THRESHOLD}%, threshold=${evalConfig.confidenceThreshold})`);
   } catch {
     log("warn", "Claude CLI not in PATH -- AI evaluation will fail, falling back to human approval");
   }
@@ -739,7 +822,7 @@ function enqueueEvaluation(approvalId) {
 }
 
 function processQueue() {
-  while (activeEvaluations < SUPERVISOR_MAX_CONCURRENT && evaluationQueue.length > 0) {
+  while (activeEvaluations < evalConfig.maxConcurrent && evaluationQueue.length > 0) {
     const { approvalId, resolve } = evaluationQueue.shift();
     const approval = pendingApprovals.get(approvalId);
 
@@ -862,7 +945,7 @@ function runEvalWithModel(prompt, model) {
     ];
 
     // Minimal env: strip MCP configs to avoid slow server startup in eval subprocess
-    const evalEnv = { ...process.env, CLAUDECODE: "" };
+    const evalEnv = { ...process.env, CLAUDECODE: "", ENABLE_PROMPT_CACHING_1H: "1" };
     delete evalEnv.MCP_SERVERS;
     delete evalEnv.CLAUDE_MCP_SERVERS;
     const child = spawn(CLAUDE_BINARY, args, {
@@ -933,24 +1016,24 @@ function runEvalWithModel(prompt, model) {
     const timer = setTimeout(() => {
       try { child.kill("SIGTERM"); } catch {}
       settle(reject, new Error("Evaluation timed out"));
-    }, SUPERVISOR_EVAL_TIMEOUT);
+    }, evalConfig.evalTimeout);
   });
 }
 
 /**
  * Check Ollama /api/ps to find the best model already loaded in VRAM.
- * Prefers larger models from the trusted list. Falls back to OLLAMA_MODEL if nothing loaded.
+ * Prefers larger models from the trusted list. Falls back to evalConfig.ollamaModel if nothing loaded.
  */
 async function selectOllamaModel() {
   try {
-    const response = await fetch(`${OLLAMA_URL}/api/ps`, { signal: AbortSignal.timeout(3000) });
-    if (!response.ok) return OLLAMA_MODEL;
+    const response = await fetch(`${evalConfig.ollamaUrl}/api/ps`, { signal: AbortSignal.timeout(3000) });
+    if (!response.ok) return evalConfig.ollamaModel;
 
     const data = await response.json();
     const loaded = data.models || [];
 
     // Prefer the configured eval model if it's already loaded
-    const configuredLoaded = loaded.find(m => m.name === OLLAMA_MODEL || m.name === OLLAMA_MODEL + ':latest');
+    const configuredLoaded = loaded.find(m => m.name === evalConfig.ollamaModel || m.name === evalConfig.ollamaModel + ':latest');
     if (configuredLoaded) return configuredLoaded.name;
 
     // Otherwise pick any loaded trusted model (smallest first — faster eval)
@@ -963,19 +1046,42 @@ async function selectOllamaModel() {
     }
 
     // Nothing trusted loaded — fall back to default (will trigger a model load)
-    return OLLAMA_MODEL;
+    return evalConfig.ollamaModel;
   } catch {
-    return OLLAMA_MODEL;
+    return evalConfig.ollamaModel;
   }
+}
+
+async function pollOllamaHealth() {
+  try {
+    const response = await fetch(`${evalConfig.ollamaUrl}/api/ps`, { signal: AbortSignal.timeout(3000) });
+    if (!response.ok) {
+      ollamaHealth = { ...ollamaHealth, status: 'down', lastCheck: Date.now(), activeEvals: activeEvaluations, queuedEvals: evaluationQueue.length, maxConcurrent: evalConfig.maxConcurrent };
+      broadcast({ type: 'ollama_health', health: ollamaHealth });
+      return;
+    }
+    const data = await response.json();
+    const models = (data.models || []).map(m => ({
+      name: m.name,
+      sizeVram: m.size_vram || 0,
+      size: m.size || 0,
+      paramSize: m.details?.parameter_size || '?',
+    }));
+    const vramUsed = models.reduce((sum, m) => sum + m.sizeVram, 0);
+    ollamaHealth = { status: 'ok', models, vramUsed, lastCheck: Date.now(), activeEvals: activeEvaluations, queuedEvals: evaluationQueue.length, maxConcurrent: evalConfig.maxConcurrent };
+  } catch {
+    ollamaHealth = { ...ollamaHealth, status: 'down', lastCheck: Date.now(), activeEvals: activeEvaluations, queuedEvals: evaluationQueue.length, maxConcurrent: evalConfig.maxConcurrent };
+  }
+  broadcast({ type: 'ollama_health', health: ollamaHealth });
 }
 
 async function runEvalWithOllama(prompt, model) {
   const selectedModel = await selectOllamaModel();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SUPERVISOR_EVAL_TIMEOUT);
+  const timeout = setTimeout(() => controller.abort(), evalConfig.evalTimeout);
 
   try {
-    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+    const response = await fetch(`${evalConfig.ollamaUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -988,6 +1094,7 @@ async function runEvalWithOllama(prompt, model) {
         format: 'json',
         options: {
           temperature: 0,
+          num_ctx: 16384,    // Ollama default is 2048 — too small for long SQL/bash tool inputs
           num_predict: 256,  // Keep response short — we only need a JSON object
         },
       }),
@@ -1021,7 +1128,7 @@ async function runEvalWithOllama(prompt, model) {
   } catch (err) {
     clearTimeout(timeout);
     if (err.name === 'AbortError') {
-      throw new Error(`Ollama eval timed out after ${SUPERVISOR_EVAL_TIMEOUT}ms`);
+      throw new Error(`Ollama eval timed out after ${evalConfig.evalTimeout}ms`);
     }
     throw err;
   }
@@ -1128,10 +1235,10 @@ async function runEvalWithHaiku(prompt) {
 async function runEvaluation(approval) {
   const prompt = buildEvalPrompt(approval);
 
-  if (EVAL_BACKEND === 'ollama') {
+  if (evalConfig.evalBackend === 'ollama') {
     // Primary: local Ollama (gpt-oss:20b or best loaded model)
     try {
-      return await runEvalWithOllama(prompt, OLLAMA_MODEL);
+      return await runEvalWithOllama(prompt, evalConfig.ollamaModel);
     } catch (ollamaErr) {
       log("warn", `Ollama eval failed (${ollamaErr.message}), falling back to Haiku proxy`, { project: approval.project });
     }
@@ -1142,9 +1249,18 @@ async function runEvaluation(approval) {
       haikusResult.fallbackFrom = 'ollama';
       return haikusResult;
     } catch (haikuErr) {
-      log("warn", `Haiku proxy eval failed (${haikuErr.message}), approving with low confidence`, { project: approval.project });
-      // Both evals failed — approve with low confidence rather than blocking work
-      return { approved: true, confidence: 0.5, reason: 'Both eval backends failed; approving with low confidence', model: 'fallback' };
+      // Both evals failed — risk-based fallback: allow read-only, deny writes/exec
+      const SAFE_TOOLS = /^(Read|Glob|Grep|LS|WebSearch|WebFetch|Task|TaskCreate|TaskGet|TaskList|TaskOutput|TaskUpdate|NotebookRead|SendMessage)$/;
+      const isSafe = SAFE_TOOLS.test(approval.tool);
+      log("warn", `Both eval backends failed (${haikuErr.message}), ${isSafe ? 'approving safe tool' : 'denying risky tool'}: ${approval.tool}`, { project: approval.project });
+      return {
+        approved: isSafe,
+        confidence: 0.5,
+        reason: isSafe
+          ? `Both eval backends failed; approving read-only tool (${approval.tool})`
+          : `Both eval backends failed; denying risky tool (${approval.tool}) — requires human review`,
+        model: 'fallback'
+      };
     }
   } else {
     // Claude CLI: Haiku only (Sonnet removed — too paranoid)
@@ -1271,7 +1387,7 @@ function resumeDeferredSession(approvalId, approval) {
   }
   const cwd = projectDir || process.cwd();
   log("info", `Resuming deferred session ${sessionId} for approval #${approvalId}`);
-  const child = require("child_process").spawn("claude", ["-p", "--resume", sessionId], {
+  const child = spawn("claude", ["-p", "--resume", sessionId], {
     cwd, stdio: "ignore", detached: true,
   });
   child.on("error", (err) => {
@@ -1311,7 +1427,7 @@ async function triggerAIEvaluation(approvalId) {
     const confPct = (result.confidence * 100).toFixed(0);
     const escalateTag = result.escalatedFrom ? " [escalated]" : "";
 
-    if (SUPERVISOR_MODE === "auto" && result.confidence >= SUPERVISOR_CONFIDENCE_THRESHOLD) {
+    if (evalConfig.mode === "auto" && result.confidence >= evalConfig.confidenceThreshold) {
       current.status = result.approved ? "approved" : "denied";
       current.reason = `[AI ${confPct}% ${modelShort}${escalateTag}] ${result.reason}`;
       current.decidedBy = "ai";
@@ -1351,7 +1467,7 @@ async function triggerAIEvaluation(approvalId) {
       resumeDeferredSession(approvalId, current);
       broadcastEvalStats();
     } else {
-      const reason = SUPERVISOR_MODE === "assisted"
+      const reason = evalConfig.mode === "assisted"
         ? "assisted mode requires human confirmation"
         : `confidence ${confPct}% below threshold`;
 
@@ -1509,7 +1625,7 @@ async function evaluateQuestionWithAI(question) {
       "--effort", "medium",
     ];
 
-    const evalEnv = { ...process.env, CLAUDECODE: "" };
+    const evalEnv = { ...process.env, CLAUDECODE: "", ENABLE_PROMPT_CACHING_1H: "1" };
     delete evalEnv.MCP_SERVERS;
     delete evalEnv.CLAUDE_MCP_SERVERS;
     const child = spawn(CLAUDE_BINARY, args, {
@@ -1777,7 +1893,7 @@ app.post("/api/hook/approval", (req, res) => {
     rawInput: raw_input,
     status: "pending",
     createdAt: new Date().toISOString(),
-    aiStatus: SUPERVISOR_MODE === "manual" ? "skipped" : "evaluating",
+    aiStatus: evalConfig.mode === "manual" ? "skipped" : "evaluating",
     aiDecision: null,
     decidedBy: null,
   };
@@ -1788,7 +1904,7 @@ app.post("/api/hook/approval", (req, res) => {
     { project: approval.project, sessionId: session_id });
   broadcast({ type: "approval_request", approval });
 
-  if (SUPERVISOR_MODE !== "manual") {
+  if (evalConfig.mode !== "manual") {
     triggerAIEvaluation(id);
   }
 
@@ -2203,11 +2319,11 @@ app.get("/api/state", (req, res) => {
     sessions: Object.fromEntries(sessions),
     supervisor: {
       version: SUPERVISOR_VERSION,
-      mode: SUPERVISOR_MODE, model: SUPERVISOR_MODEL, fastModel: SUPERVISOR_FAST_MODEL,
-      confidenceThreshold: SUPERVISOR_CONFIDENCE_THRESHOLD,
+      mode: evalConfig.mode, model: SUPERVISOR_MODEL, fastModel: SUPERVISOR_FAST_MODEL,
+      confidenceThreshold: evalConfig.confidenceThreshold,
       escalationThreshold: EVAL_ESCALATION_THRESHOLD,
       activeEvaluations, queueLength: evaluationQueue.length,
-      evalBackend: EVAL_BACKEND, ollamaModel: OLLAMA_MODEL, ollamaUrl: OLLAMA_URL,
+      evalBackend: evalConfig.evalBackend, ollamaModel: evalConfig.ollamaModel, ollamaUrl: evalConfig.ollamaUrl,
     },
     claudeVersion,
     coordinatorRequests: Array.from(coordinatorRequests.entries()).map(([id, e]) => serializeCoordinatorEntry(id, e)),
@@ -2289,7 +2405,7 @@ function createDtachSession(project, projectDir, cols, rows, sessionId) {
   }
   const child = spawn("dtach", args, {
     cwd: projectDir,
-    env: { ...process.env, TERM: "xterm-256color", CLAUDECODE: "", CLAUDE_CODE_TASK_LIST_ID: `task-${project}`, MCP_CONNECTION_NONBLOCKING: "true" },
+    env: { ...process.env, TERM: "xterm-256color", CLAUDECODE: "", CLAUDE_CODE_TASK_LIST_ID: `task-${project}`, MCP_CONNECTION_NONBLOCKING: "true", ENABLE_PROMPT_CACHING_1H: "1" },
     stdio: "ignore",
     detached: true,
   });
@@ -3087,11 +3203,28 @@ app.post("/api/reload-policy", async (req, res) => {
 });
 
 // ─── PII Config Endpoints ─────────────────────────────────────────────────
+const PII_CUSTOM_PATTERNS_PATH = join(__dirname, 'data', 'pii-custom-patterns.json');
+
+function loadCustomPatternsFile() {
+  try {
+    const data = JSON.parse(readFileSync(PII_CUSTOM_PATTERNS_PATH, 'utf8'));
+    return Array.isArray(data.patterns) ? data.patterns : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomPatternsFile(patterns) {
+  writeFileSync(PII_CUSTOM_PATTERNS_PATH, JSON.stringify({ patterns }, null, 2));
+}
+
 function loadPiiConfig() {
   try {
-    return JSON.parse(readFileSync(join(__dirname, 'data', 'pii-config.json'), 'utf8'));
+    const cfg = JSON.parse(readFileSync(join(__dirname, 'data', 'pii-config.json'), 'utf8'));
+    cfg.customPatterns = loadCustomPatternsFile();
+    return cfg;
   } catch {
-    return { enabled: false, path: 'mcp', mode: 'structured', types: { IPv4: true, IPv6: true, MAC: true, EMAIL: true, HOST: true, PHONE: true, SSN: true, NAME: true }, projects: {} };
+    return { enabled: false, path: 'mcp', mode: 'structured', types: { IPv4: true, IPv6: true, MAC: true, EMAIL: true, HOST: true, PHONE: true, SSN: true, NAME: true, DOB: true, MRN: true, INSURANCE: true, ADDRESS: true, CUSTOM: true }, customPatterns: [], projects: {} };
   }
 }
 
@@ -3121,59 +3254,143 @@ app.post("/api/pii/config", express.json(), (req, res) => {
     }
   }
   try {
-    writeFileSync(join(__dirname, 'data', 'pii-config.json'), JSON.stringify(cfg, null, 2));
-    log('ok', 'PII config updated', { enabled: cfg.enabled, mode: cfg.mode });
-
-    // Auto-deploy/remove .mcp.json to all Claude projects
-    const projectsRoot = join(__dirname, '..');
-    try {
-      const dirs = readdirSync(projectsRoot);
-      let deployed = 0;
-      for (const dir of dirs) {
-        if (dir === 'claude-supervisor') continue; // supervisor is exempt
-        const claudeDir = join(projectsRoot, dir, '.claude');
-        const mcpFile = join(projectsRoot, dir, '.mcp.json');
-        if (!existsSync(claudeDir)) continue;
-
-        if (cfg.enabled) {
-          const mcpPayload = {
-            mcpServers: {
-              pii: {
-                command: "node",
-                args: [join(__dirname, "mcp-pii-server.js")],
-                env: { PII_SESSION_ID: dir }
-              }
-            }
-          };
-          let existing = {};
-          try { existing = JSON.parse(readFileSync(mcpFile, 'utf8')); } catch {}
-          existing.mcpServers = { ...existing.mcpServers, ...mcpPayload.mcpServers };
-          writeFileSync(mcpFile, JSON.stringify(existing, null, 2));
-          deployed++;
-        } else {
-          try {
-            const existing = JSON.parse(readFileSync(mcpFile, 'utf8'));
-            if (existing.mcpServers?.pii) {
-              delete existing.mcpServers.pii;
-              if (Object.keys(existing.mcpServers).length === 0) {
-                writeFileSync(mcpFile, '{"mcpServers":{}}');
-              } else {
-                writeFileSync(mcpFile, JSON.stringify(existing, null, 2));
-              }
-              deployed++;
-            }
-          } catch {}
-        }
-      }
-      if (deployed > 0) log("info", `PII: ${cfg.enabled ? 'deployed' : 'removed'} .mcp.json in ${deployed} projects`);
-    } catch (e) {
-      log("warn", `PII .mcp.json deploy failed: ${e.message}`);
-    }
-
+    // Strip customPatterns — those are stored in pii-custom-patterns.json (gitignored)
+    // Strip enabled — PII is now enabled per-project via .mcp.json, not globally
+    const { customPatterns: _cp, enabled: _en, ...cfgToSave } = cfg;
+    writeFileSync(join(__dirname, 'data', 'pii-config.json'), JSON.stringify(cfgToSave, null, 2));
+    log('ok', 'PII config updated', { mode: cfg.mode });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ─── PII Per-Project Endpoints ────────────────────────────────────────────
+
+// Helper: get list of all known project dirs from active terminals + sessions
+function getKnownProjects() {
+  const projects = new Map(); // name -> dir
+  for (const [, term] of terminals) {
+    if (term.project && term.projectDir) {
+      projects.set(term.project, term.projectDir);
+    }
+  }
+  return projects;
+}
+
+// Helper: check if a project's .mcp.json has the pii MCP server entry
+function isPiiEnabledForProject(projectDir) {
+  const mcpFile = join(projectDir, '.mcp.json');
+  try {
+    const mcp = JSON.parse(readFileSync(mcpFile, 'utf8'));
+    return !!mcp?.mcpServers?.pii;
+  } catch {
+    return false;
+  }
+}
+
+app.get("/api/pii/projects", (req, res) => {
+  const known = getKnownProjects();
+  const result = [];
+  for (const [name, dir] of known) {
+    // Hide supervisor itself — it's exempt from PII redirection
+    if (name === 'claude-supervisor') continue;
+    result.push({ name, dir, piiEnabled: isPiiEnabledForProject(dir) });
+  }
+  result.sort((a, b) => a.name.localeCompare(b.name));
+  res.json(result);
+});
+
+app.post("/api/pii/projects/:name/enable", (req, res) => {
+  const { name } = req.params;
+  const known = getKnownProjects();
+  if (!known.has('claude-supervisor')) known.set('claude-supervisor', __dirname);
+  const projectDir = known.get(name);
+  if (!projectDir) {
+    return res.status(404).json({ error: `Project '${name}' not found in active sessions` });
+  }
+  const mcpFile = join(projectDir, '.mcp.json');
+  let existing = {};
+  try { existing = JSON.parse(readFileSync(mcpFile, 'utf8')); } catch {}
+  if (!existing.mcpServers) existing.mcpServers = {};
+  existing.mcpServers.pii = {
+    command: "node",
+    args: [join(__dirname, "mcp-pii-server.js")],
+    env: { PII_SESSION_ID: name }
+  };
+  try {
+    writeFileSync(mcpFile, JSON.stringify(existing, null, 2));
+    log('ok', `PII enabled for project '${name}'`, { mcpFile });
+    res.json({ ok: true, requiresRestart: true, message: "PII MCP server added. Restart the Claude session for changes to take effect." });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/pii/projects/:name/disable", (req, res) => {
+  const { name } = req.params;
+  const known = getKnownProjects();
+  if (!known.has('claude-supervisor')) known.set('claude-supervisor', __dirname);
+  const projectDir = known.get(name);
+  if (!projectDir) {
+    return res.status(404).json({ error: `Project '${name}' not found in active sessions` });
+  }
+  const mcpFile = join(projectDir, '.mcp.json');
+  try {
+    const existing = JSON.parse(readFileSync(mcpFile, 'utf8'));
+    if (existing.mcpServers?.pii) {
+      delete existing.mcpServers.pii;
+      writeFileSync(mcpFile, JSON.stringify(existing, null, 2));
+      log('ok', `PII disabled for project '${name}'`, { mcpFile });
+    }
+    res.json({ ok: true, requiresRestart: true, message: "PII MCP server removed. Restart the Claude session for changes to take effect." });
+  } catch (e) {
+    // If file doesn't exist, PII is already disabled
+    res.json({ ok: true, requiresRestart: false, message: "PII was not configured for this project." });
+  }
+});
+
+// ─── Eval Config Endpoints ─────────────────────────────────────────────────
+app.get('/api/eval-config', (req, res) => {
+  res.json(evalConfig);
+});
+
+app.post('/api/eval-config', express.json(), (req, res) => {
+  const allowed = ['mode', 'confidenceThreshold', 'evalTimeout', 'maxConcurrent', 'evalBackend', 'ollamaUrl', 'ollamaModel'];
+  const updates = {};
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) {
+      updates[key] = req.body[key];
+    }
+  }
+  // Validate
+  if (updates.mode && !['auto', 'manual', 'off'].includes(updates.mode)) {
+    return res.status(400).json({ error: 'mode must be auto, manual, or off' });
+  }
+  if (updates.confidenceThreshold !== undefined) {
+    updates.confidenceThreshold = parseFloat(updates.confidenceThreshold);
+    if (isNaN(updates.confidenceThreshold) || updates.confidenceThreshold < 0 || updates.confidenceThreshold > 1) {
+      return res.status(400).json({ error: 'confidenceThreshold must be 0-1' });
+    }
+  }
+  if (updates.maxConcurrent !== undefined) {
+    updates.maxConcurrent = parseInt(updates.maxConcurrent, 10);
+    if (isNaN(updates.maxConcurrent) || updates.maxConcurrent < 1 || updates.maxConcurrent > 20) {
+      return res.status(400).json({ error: 'maxConcurrent must be 1-20' });
+    }
+  }
+  if (updates.evalTimeout !== undefined) {
+    updates.evalTimeout = parseInt(updates.evalTimeout, 10);
+    if (isNaN(updates.evalTimeout) || updates.evalTimeout < 5000 || updates.evalTimeout > 300000) {
+      return res.status(400).json({ error: 'evalTimeout must be 5000-300000' });
+    }
+  }
+
+  Object.assign(evalConfig, updates);
+  saveEvalConfig(evalConfig);
+  log("info", `Eval config updated: ${JSON.stringify(updates)}`);
+  broadcast({ type: 'eval_config', config: evalConfig });
+  res.json(evalConfig);
 });
 
 app.get("/api/pii/stats", (req, res) => {
@@ -3197,6 +3414,67 @@ app.get("/api/pii/stats", (req, res) => {
     res.json({ count: sessions.length, sessions });
   } catch (e) {
     if (e.code === 'ENOENT') return res.json({ count: 0, sessions: [] });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── PII Custom Patterns Endpoints ────────────────────────────────────────
+
+app.get("/api/pii/custom-patterns", (req, res) => {
+  res.json(loadCustomPatternsFile());
+});
+
+app.post("/api/pii/custom-patterns", express.json(), (req, res) => {
+  const patterns = req.body;
+  if (!Array.isArray(patterns)) {
+    return res.status(400).json({ error: "Body must be an array of patterns" });
+  }
+  for (const p of patterns) {
+    if (!p || typeof p !== 'object') return res.status(400).json({ error: "Each pattern must be an object" });
+    if (!['name', 'regex'].includes(p.type)) return res.status(400).json({ error: "pattern.type must be 'name' or 'regex'" });
+    if (typeof p.value !== 'string' || !p.value.trim()) return res.status(400).json({ error: "pattern.value must be a non-empty string" });
+    if (p.type === 'regex') {
+      try { new RegExp(p.value); } catch { return res.status(400).json({ error: `Invalid regex: ${p.value}` }); }
+    }
+  }
+  try {
+    saveCustomPatternsFile(patterns);
+    res.json({ ok: true, count: patterns.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/pii/custom-patterns/add", express.json(), (req, res) => {
+  const p = req.body;
+  if (!p || typeof p !== 'object') return res.status(400).json({ error: "Body must be a pattern object" });
+  if (!['name', 'regex'].includes(p.type)) return res.status(400).json({ error: "pattern.type must be 'name' or 'regex'" });
+  if (typeof p.value !== 'string' || !p.value.trim()) return res.status(400).json({ error: "pattern.value must be a non-empty string" });
+  if (p.type === 'regex') {
+    try { new RegExp(p.value); } catch { return res.status(400).json({ error: `Invalid regex: ${p.value}` }); }
+  }
+  try {
+    const patterns = loadCustomPatternsFile();
+    patterns.push({ type: p.type, value: p.value.trim(), label: p.label?.trim() || '' });
+    saveCustomPatternsFile(patterns);
+    res.json({ ok: true, patterns });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete("/api/pii/custom-patterns/:index", (req, res) => {
+  const idx = parseInt(req.params.index, 10);
+  if (isNaN(idx) || idx < 0) return res.status(400).json({ error: "Invalid index" });
+  try {
+    const patterns = loadCustomPatternsFile();
+    if (idx >= patterns.length) {
+      return res.status(404).json({ error: "Pattern index out of range" });
+    }
+    patterns.splice(idx, 1);
+    saveCustomPatternsFile(patterns);
+    res.json({ ok: true, patterns });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
@@ -3300,8 +3578,12 @@ app.post("/api/version/update", async (req, res) => {
   res.json({ installed: newVersion, latest: claudeVersion.latest, updateAvailable: claudeVersion.updateAvailable });
 });
 
-app.get("/", (req, res) => res.type("html").send(WEB_UI));
-app.get("/docs/usage-guide.html", (req, res) => res.type("html").send(USAGE_GUIDE));
+app.get("/api/hook-rules", (req, res) => {
+  res.json(HOOK_RULES);
+});
+
+app.get("/", (req, res) => res.type("html").set("Cache-Control", "no-store").send(WEB_UI));
+app.get("/docs/usage-guide.html", (req, res) => res.type("html").set("Cache-Control", "no-store").send(USAGE_GUIDE));
 
 // ── Anthropic API Proxy ─────────────────────────────────────────────────────
 // When ANTHROPIC_BASE_URL=http://localhost:3847 is set in a Claude Code session,
@@ -3314,6 +3596,46 @@ app.get("/docs/usage-guide.html", (req, res) => res.type("html").send(USAGE_GUID
 // to the web UI so the dashboard can show API activity per session.
 
 const apiCallsBySession = new Map(); // claudeSessionId -> { calls, tokens, lastSeen }
+
+/**
+ * Return a streaming pump function that reads from a WHATWG ReadableStreamReader,
+ * restores PII tokens in each chunk, and writes to res.
+ *
+ * For SSE (streaming) responses, tokens like [IPv4-001] are short and bracket-delimited.
+ * They won't normally straddle chunk boundaries, but we keep a small leftover buffer to
+ * be defensive: if a chunk ends with an open '[' that hasn't been closed with ']', we hold
+ * back up to 64 bytes and prepend them to the next chunk.
+ */
+function makeRestorePump(reader, res, sanitizer) {
+  const MAX_TAIL = 64;
+  let leftover = "";
+  return async () => {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        // Flush any remaining leftover
+        if (leftover) res.write(Buffer.from(sanitizer.restore(leftover), "utf-8"));
+        res.end();
+        break;
+      }
+      const chunk = leftover + Buffer.from(value).toString("utf-8");
+      // Check if the tail contains an unclosed '[' — if so, hold it back
+      const lastOpen = chunk.lastIndexOf("[");
+      const lastClose = chunk.lastIndexOf("]");
+      let safe, tail;
+      if (lastOpen > lastClose && chunk.length - lastOpen <= MAX_TAIL) {
+        // Potential partial token at end — hold back from the last '['
+        safe = chunk.slice(0, lastOpen);
+        tail = chunk.slice(lastOpen);
+      } else {
+        safe = chunk;
+        tail = "";
+      }
+      leftover = tail;
+      if (safe) res.write(Buffer.from(sanitizer.restore(safe), "utf-8"));
+    }
+  };
+}
 
 app.use("/v1", express.raw({ type: "*/*", limit: "50mb" }), async (req, res) => {
   const claudeSessionId = req.headers["x-claude-code-session-id"] || null;
@@ -3345,7 +3667,8 @@ app.use("/v1", express.raw({ type: "*/*", limit: "50mb" }), async (req, res) => 
   // PII scrubbing — only POST /v1/messages with a body, when API path is active
   let forwardBody = req.method !== "GET" && req.method !== "HEAD" && req.body?.length ? req.body : undefined;
   const piiCfg = forwardBody && req.method === "POST" && req.path === "/messages" ? loadPiiConfig() : null;
-  const piiApiActive = piiCfg?.enabled && (piiCfg.path === "api" || piiCfg.path === "both");
+  // pii-config.json uses 'path' to indicate where scrubbing is active; no separate 'enabled' flag.
+  const piiApiActive = piiCfg && (piiCfg.path === "api" || piiCfg.path === "both");
   if (piiApiActive) {
     try {
       const bodyObj = JSON.parse(forwardBody.toString("utf-8"));
@@ -3380,16 +3703,27 @@ app.use("/v1", express.raw({ type: "*/*", limit: "50mb" }), async (req, res) => 
     }
     res.status(upstream.status);
 
-    // Stream the response body back to the client
+    // Stream the response body back to the client, restoring PII tokens if scrubbing is active
     if (upstream.body) {
       const reader = upstream.body.getReader();
-      const pump = async () => {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) { res.end(); break; }
-          res.write(Buffer.from(value));
-        }
-      };
+      // Determine if we should restore tokens in the response.
+      // We need the same sanitizer that was used to scrub the request body.
+      const restoreSanitizer = piiApiActive
+        ? getOrCreateSanitizer(claudeSessionId || "anonymous")
+        : null;
+
+      let pump;
+      if (restoreSanitizer) {
+        pump = makeRestorePump(reader, res, restoreSanitizer);
+      } else {
+        pump = async () => {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) { res.end(); break; }
+            res.write(Buffer.from(value));
+          }
+        };
+      }
       pump().catch((err) => {
         log("warn", `API proxy stream error: ${err.message}`);
         res.end();
@@ -3420,13 +3754,14 @@ wss.on("connection", (ws) => {
       type: "init", pending, aiResolved, recentLogs: logs.slice(-30), projects,
       pendingQuestions: pendingQs, agentMessages,
       teamChat: Object.fromEntries([...teamChatMessages.entries()].map(([room, msgs]) => [room, msgs.slice(-50)])),
-      evalStats, serverStartedAt,
+      evalStats, serverStartedAt, ollamaHealth, hookRules: HOOK_RULES,
+      evalConfig,
       supervisor: {
         version: SUPERVISOR_VERSION, startupCommit: STARTUP_COMMIT.slice(0, 7),
-        mode: SUPERVISOR_MODE, model: SUPERVISOR_MODEL, fastModel: SUPERVISOR_FAST_MODEL,
-        confidenceThreshold: SUPERVISOR_CONFIDENCE_THRESHOLD,
+        mode: evalConfig.mode, model: SUPERVISOR_MODEL, fastModel: SUPERVISOR_FAST_MODEL,
+        confidenceThreshold: evalConfig.confidenceThreshold,
         escalationThreshold: EVAL_ESCALATION_THRESHOLD,
-        evalBackend: EVAL_BACKEND, ollamaModel: OLLAMA_MODEL, ollamaUrl: OLLAMA_URL,
+        evalBackend: evalConfig.evalBackend, ollamaModel: evalConfig.ollamaModel, ollamaUrl: evalConfig.ollamaUrl,
       },
       terminals: [...terminals.values()].map((t) => ({
         id: t.id, project: t.project, status: t.status,
@@ -3825,6 +4160,7 @@ Post your key findings to this chat room as you work. Use: sv chat post ${chatRo
   env.SV_PROJECT = basename(projectDir);
   env.CLAUDE_CODE_TASK_LIST_ID = `task-${basename(projectDir)}`;
   env.MCP_CONNECTION_NONBLOCKING = "true";
+  env.ENABLE_PROMPT_CACHING_1H = "1";
   // Merge any env vars from the request payload (overrides defaults above)
   if (request.env && typeof request.env === "object") {
     Object.assign(env, request.env);
@@ -3916,6 +4252,7 @@ function dispatchMoltkeRequest(requestId, request, projectDir) {
   env.SV_PROJECT = basename(projectDir);
   env.CLAUDE_CODE_TASK_LIST_ID = `task-${basename(projectDir)}`;
   env.MCP_CONNECTION_NONBLOCKING = "true";
+  env.ENABLE_PROMPT_CACHING_1H = "1";
 
   const moltkeRoom = `feasibility-${requestId.substring(0, 8)}`;
 
@@ -4127,6 +4464,7 @@ function dispatchDebate(requestId, request, projectDir) {
   env.SV_PROJECT = basename(projectDir);
   env.CLAUDE_CODE_TASK_LIST_ID = `task-${basename(projectDir)}`;
   env.MCP_CONNECTION_NONBLOCKING = "true";
+  env.ENABLE_PROMPT_CACHING_1H = "1";
 
   const debateRoom = `debate-${requestId.substring(0, 8)}`;
   const defaultTimeout = 900;
@@ -5386,12 +5724,15 @@ if (PII_SCRUB_ENABLED) {
 }
 
 server.listen(PORT, "0.0.0.0", () => {
-  log("info", `Supervisor ${SUPERVISOR_VERSION} running on http://0.0.0.0:${PORT} (mode=${SUPERVISOR_MODE})`);
+  log("info", `Supervisor ${SUPERVISOR_VERSION} running on http://0.0.0.0:${PORT} (mode=${evalConfig.mode})`);
   if (PII_SCRUB_ENABLED) log("info", "PII scrubbing enabled for /v1/messages requests");
-  log("info", `AI eval backend: ${EVAL_BACKEND}${EVAL_BACKEND === 'ollama' ? ` (${OLLAMA_MODEL} default, ${OLLAMA_TRUSTED_MODELS.length} trusted models, at ${OLLAMA_URL})` : ''}`);
+  log("info", `AI eval backend: ${evalConfig.evalBackend}${evalConfig.evalBackend === 'ollama' ? ` (${evalConfig.ollamaModel} default, ${OLLAMA_TRUSTED_MODELS.length} trusted models, at ${evalConfig.ollamaUrl})` : ''}`);
   if (AUTH_ENABLED) {
     log("info", "Auth enabled — dashboard requires password login");
   } else {
     log("warn", "Auth disabled (SUPERVISOR_PASSWORD not set) — dashboard is open to anyone on the network");
   }
 });
+
+setInterval(pollOllamaHealth, 15000);
+pollOllamaHealth(); // initial check

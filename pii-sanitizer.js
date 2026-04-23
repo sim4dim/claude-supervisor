@@ -20,6 +20,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const TABLES_DIR = path.join(__dirname, 'data', 'pii-tables');
 const TABLE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const PII_CONFIG_PATH = path.join(__dirname, 'data', 'pii-config.json');
+const PII_CUSTOM_PATTERNS_PATH = path.join(__dirname, 'data', 'pii-custom-patterns.json');
 
 // Emails excluded from masking (known bot/system addresses)
 const EXCLUDED_EMAILS = new Set([
@@ -65,11 +67,35 @@ const RE_HOST = /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+(?:inter
 // Phone numbers: US and international variations
 const RE_PHONE = /(?:\+\d{1,3}[\s\-]?)?\(?\d{3}\)?[\s\-]\d{3}[\s\-]\d{4}\b|\+\d{1,3}[\s]?\d{2,4}[\s]?\d{3,4}[\s]?\d{3,4}\b/g;
 
-// SSN: XXX-XX-XXXX with optional dashes/spaces
-const RE_SSN = /\b(\d{3})[- ]?(\d{2})[- ]?(\d{4})\b/g;
+// SSN: XXX-XX-XXXX — separators must be consistent (prevents ZIP+4 false positives like 60601-1234)
+const RE_SSN = /\b(\d{3})([-  ])(\d{2})\2(\d{4})\b|(?<!\d[-])(?<!\d)\b(\d{3})(\d{2})(\d{4})\b(?![-]\d)/g;
 
-// Names: capitalized words following PII-indicating field labels
-const RE_NAME_CONTEXT = /(?:(?:full[_ ]?name|first[_ ]?name|last[_ ]?name|name|customer|patient|employee|user|contact|owner|applicant|recipient|beneficiary|subscriber|member|client|tenant|resident|passenger|caller|account[_ ]?holder)\s*[:=]\s*)([A-Z][a-z]+(?:\s+(?:[A-Z][a-z]+|[A-Z]\.?|(?:Jr|Sr|II|III|IV|MD|PhD)\.?))+)/gi;
+// Names: capitalized words following PII-indicating patient/client field labels
+// NOTE: doctor/physician/surgeon/provider are intentionally excluded so provider names stay visible
+const RE_NAME_CONTEXT = /(?:(?:full[_ ]?name|first[_ ]?name|last[_ ]?name|name|customer|patient|employee|user|contact|owner|applicant|recipient|beneficiary|subscriber|member|client|tenant|resident|passenger|caller|account[_ ]?holder)\s*[:=]\s*|(?:patient)\s+)([A-Z][a-z]+(?:\s+(?:[A-Z][a-z]+|[A-Z]\.?|(?:Jr|Sr|II|III|IV|MD|PhD)\.?))+)/gi;
+
+// DOB: Date of birth in various formats
+// Matches: DOB: 03/15/1985, Date of Birth: March 15, 1985, DOB: 1985-03-15
+const RE_DOB = /(?:D\.?O\.?B\.?|Date\s+of\s+Birth|Birth\s*[Dd]ate|Birthdate)\s*[:=]?\s*(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4})/gi;
+
+// MRN: Medical Record Number — requires prefix label (MRN:, Chart #, etc.) to avoid false positives.
+// The prefix requirement is intentional: bare 8-10 digit numbers overlap with phone numbers,
+// policy IDs, zip+4 codes, and other numeric data.  Prefix-free matching is opt-in via
+// mrnBare: true in the types config.
+const RE_MRN = /(?:MRN|Medical\s+Record\s+(?:Number|#|No\.?)|Chart\s+(?:Number|#|No\.?))\s*[:=\-#]?\s*(\d{5,12})\b/gi;
+
+// RE_MRN_BARE: opt-in pattern for bare 8-10 digit numeric IDs.
+// Only active when types.mrnBare === true.
+// Deliberately does NOT match when immediately preceded or followed by digits (avoids
+// matching substrings of phone numbers, credit cards, or long numeric sequences),
+// and does NOT match when the preceding context looks like a date (MM/DD or YYYY-).
+const RE_MRN_BARE = /(?<![\/\-\d])(?<!\d{4}-)(?<!\d{2}\/)\b(\d{8,10})\b(?![\-\/\d])/g;
+
+// Insurance / Policy IDs
+const RE_INSURANCE = /(?:Insurance\s+ID|Member\s+ID|Policy\s+(?:Number|#|No\.?)|Group\s+(?:Number|#|No\.?)|Subscriber\s+ID|Claim\s+(?:Number|#|No\.?))\s*[:=]?\s*([\w\-]{5,20})\b/gi;
+
+// Street addresses: number + street + optional apt/suite + city + 2-letter state + zip
+const RE_ADDRESS = /\b\d{1,6}\s+[A-Z][a-zA-Z0-9\s]{2,40}(?:St(?:reet)?|Ave(?:nue)?|Blvd|Rd|Road|Dr(?:ive)?|Ct|Court|Ln|Lane|Way|Pl|Place|Pkwy|Parkway|Cir|Circle|Ter(?:race)?|Hwy|Highway)\b\.?(?:\s*,?\s*(?:Apt|Suite|Ste|Unit|#)\s*[\w\-]+)?\s*,\s*[A-Z][a-zA-Z\s]{2,30},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/g;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -105,6 +131,47 @@ function isPublicHostname(host) {
     if (lower === pub || lower.endsWith('.' + pub)) return true;
   }
   return false;
+}
+
+/**
+ * Parse a date string from a DOB match and calculate age in years.
+ * Returns null if unparseable.
+ */
+function calculateAge(dobStr) {
+  let dob = null;
+
+  // ISO: 1985-03-15
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dobStr)) {
+    dob = new Date(dobStr);
+  }
+  // MM/DD/YYYY
+  else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(dobStr)) {
+    const [m, d, y] = dobStr.split('/');
+    dob = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+  }
+  // Month DD, YYYY or D Month YYYY
+  else {
+    dob = new Date(dobStr);
+  }
+
+  if (!dob || isNaN(dob.getTime())) return null;
+
+  const now = new Date();
+  let age = now.getFullYear() - dob.getFullYear();
+  const m = now.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) age--;
+  if (age < 0 || age > 150) return null;
+  return age;
+}
+
+/** Load custom patterns from pii-custom-patterns.json. Returns [] if none. */
+function loadCustomPatterns() {
+  try {
+    const data = JSON.parse(fs.readFileSync(PII_CUSTOM_PATTERNS_PATH, 'utf8'));
+    return Array.isArray(data.patterns) ? data.patterns : [];
+  } catch {
+    return [];
+  }
 }
 
 function tablePath(sessionId) {
@@ -154,18 +221,26 @@ export class PiiSanitizer {
   constructor(sessionId, { mode = 'token', types = {} } = {}) {
     this.sessionId = sessionId;
     this.mode = mode;
-    // Per-type enable flags — default all enabled
+    // Per-type enable flags — default all enabled except mrnBare (opt-in; high false-positive risk)
     this.enabledTypes = {
       IPv4: true, IPv6: true, MAC: true, EMAIL: true, HOST: true, PHONE: true,
-      SSN: true, NAME: true,
+      SSN: true, NAME: true, DOB: true, MRN: true, INSURANCE: true, ADDRESS: true,
+      CUSTOM: true,
+      mrnBare: false,   // opt-in: bare 8-10 digit MRN matching without prefix label
       ...types,
     };
     this.created = new Date().toISOString();
     this.realToToken = new Map(); // "localhost0" → "[IPv4-001]" or "1.2.3.4"
     this.tokenToReal = new Map(); // "[IPv4-001]" → "localhost0" or "1.2.3.4" → "localhost0"
-    this.counters = { IPv4: 0, IPv6: 0, MAC: 0, EMAIL: 0, HOST: 0, PHONE: 0, SSN: 0, NAME: 0 };
+    this.counters = {
+      IPv4: 0, IPv6: 0, MAC: 0, EMAIL: 0, HOST: 0, PHONE: 0, SSN: 0, NAME: 0,
+      DOB: 0, MRN: 0, MRN_BARE: 0, INSURANCE: 0, ADDRESS: 0, 'CUSTOM-NAME': 0, CUSTOM: 0,
+    };
     // Running scrub counts (lifetime, not reset between calls)
-    this._scrubCounts = { IPv4: 0, IPv6: 0, MAC: 0, EMAIL: 0, HOST: 0, PHONE: 0, SSN: 0, NAME: 0 };
+    this._scrubCounts = {
+      IPv4: 0, IPv6: 0, MAC: 0, EMAIL: 0, HOST: 0, PHONE: 0, SSN: 0, NAME: 0,
+      DOB: 0, MRN: 0, MRN_BARE: 0, INSURANCE: 0, ADDRESS: 0, 'CUSTOM-NAME': 0, CUSTOM: 0,
+    };
 
     // Structured mode maps — only initialized when needed
     if (mode === 'structured') {
@@ -357,7 +432,14 @@ export class PiiSanitizer {
     });
     RE_HOST.lastIndex = 0;
 
-    // 6. Phone numbers — always use bracket tokens
+    // 6. Street addresses — before phone/SSN to prevent zip code overlap with 9-digit patterns
+    text = text.replace(RE_ADDRESS, (match) => {
+      if (!this.enabledTypes.ADDRESS) return match;
+      return this._getToken('ADDRESS', match.trim());
+    });
+    RE_ADDRESS.lastIndex = 0;
+
+    // 7. Phone numbers — always use bracket tokens
     text = text.replace(RE_PHONE, (match) => {
       if (!this.enabledTypes.PHONE) return match;
       // Require at least 10 digits to avoid matching port numbers or short codes
@@ -367,15 +449,17 @@ export class PiiSanitizer {
     });
     RE_PHONE.lastIndex = 0;
 
-    // 7. SSN — after phone since 9-digit patterns could overlap with phone tails
-    text = text.replace(RE_SSN, (match, area, group, serial) => {
+    // 8a. SSN — after phone since 9-digit patterns could overlap with phone tails
+    text = text.replace(RE_SSN, (match, a1, sep, g1, s1, a2, g2, s2) => {
       if (!this.enabledTypes.SSN) return match;
+      // Two branches: with consistent separators (a1/g1/s1) or no separators (a2/g2/s2)
+      const area = a1 || a2, group = g1 || g2, serial = s1 || s2;
       if (!isValidSSN(area, group, serial)) return match;
       return this._getToken('SSN', match);
     });
     RE_SSN.lastIndex = 0;
 
-    // 8. Names — context-triggered (after field labels only); goes last so earlier
+    // 8b. Names — context-triggered (after field labels only); goes last so earlier
     //    steps have already replaced IPs/emails within the same line
     text = text.replace(RE_NAME_CONTEXT, (fullMatch, nameCapture) => {
       if (!this.enabledTypes.NAME) return fullMatch;
@@ -384,6 +468,77 @@ export class PiiSanitizer {
       return fullMatch.replace(nameCapture, token);
     });
     RE_NAME_CONTEXT.lastIndex = 0;
+
+    // 9. DOB — replace with age calculation to preserve medical analytics value
+    text = text.replace(RE_DOB, (fullMatch, dobStr) => {
+      if (!this.enabledTypes.DOB) return fullMatch;
+      // Check if we already have a mapping for this dobStr
+      if (this.realToToken.has(dobStr)) {
+        this._scrubCounts.DOB++;
+        return fullMatch.replace(dobStr, this.realToToken.get(dobStr));
+      }
+      const age = calculateAge(dobStr);
+      const ageNote = age !== null ? `, age ${age}` : '';
+      this.counters.DOB++;
+      const displayToken = `[DOB-${String(this.counters.DOB).padStart(3, '0')}${ageNote}]`;
+      this.realToToken.set(dobStr, displayToken);
+      this.tokenToReal.set(displayToken, dobStr);
+      this._scrubCounts.DOB++;
+      return fullMatch.replace(dobStr, displayToken);
+    });
+    RE_DOB.lastIndex = 0;
+
+    // 10. MRN — Medical Record Number (prefix-required)
+    text = text.replace(RE_MRN, (fullMatch, mrnValue) => {
+      if (!this.enabledTypes.MRN) return fullMatch;
+      const token = this._getToken('MRN', mrnValue);
+      return fullMatch.replace(mrnValue, token);
+    });
+    RE_MRN.lastIndex = 0;
+
+    // 10b. MRN_BARE — opt-in bare 8-10 digit MRN matching (disabled by default)
+    if (this.enabledTypes.mrnBare) {
+      text = text.replace(RE_MRN_BARE, (fullMatch, mrnValue) => {
+        // Skip if already masked by a prior step (token pattern)
+        if (/^\[/.test(mrnValue)) return fullMatch;
+        const token = this._getToken('MRN_BARE', mrnValue);
+        return fullMatch.replace(mrnValue, token);
+      });
+      RE_MRN_BARE.lastIndex = 0;
+    }
+
+    // 11. Insurance / Policy IDs
+    text = text.replace(RE_INSURANCE, (fullMatch, insValue) => {
+      if (!this.enabledTypes.INSURANCE) return fullMatch;
+      const token = this._getToken('INSURANCE', insValue);
+      return fullMatch.replace(insValue, token);
+    });
+    RE_INSURANCE.lastIndex = 0;
+
+    // 12. Custom patterns — loaded from config at scrub time for live updates
+    if (this.enabledTypes.CUSTOM) {
+      const customPatterns = loadCustomPatterns();
+      for (const pattern of customPatterns) {
+        if (!pattern || !pattern.value) continue;
+        if (pattern.type === 'name') {
+          // Exact match, case-insensitive
+          const escaped = pattern.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const re = new RegExp(`\\b${escaped}\\b`, 'gi');
+          text = text.replace(re, (match) => {
+            return this._getToken('CUSTOM-NAME', match.toLowerCase());
+          });
+        } else if (pattern.type === 'regex') {
+          try {
+            const re = new RegExp(pattern.value, 'g');
+            text = text.replace(re, (match) => {
+              return this._getToken('CUSTOM', match);
+            });
+          } catch {
+            // Invalid regex — skip silently
+          }
+        }
+      }
+    }
 
     return text;
   }

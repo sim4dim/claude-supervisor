@@ -10,3 +10,4 @@ screenshots/
 !.claude/settings.json
 !.claude/rules/
 *.log
+data/pii-custom-patterns.json

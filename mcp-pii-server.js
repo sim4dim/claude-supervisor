@@ -14,6 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync, exec } from 'child_process';
 import { promisify } from 'util';
+import { glob as nodeGlob } from 'fs/promises';
 import { getOrCreateSanitizer } from './pii-sanitizer.js';
 
 const execAsync = promisify(exec);
@@ -27,7 +28,7 @@ function loadPiiConfig() {
   try {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   } catch {
-    return { enabled: true, mode: 'structured', types: { IPv4: true, IPv6: true, MAC: true, EMAIL: true, HOST: true, PHONE: true }, projects: {} };
+    return { enabled: true, mode: 'structured', types: { IPv4: true, IPv6: true, MAC: true, EMAIL: true, HOST: true, PHONE: true, SSN: true, NAME: true, DOB: true, MRN: true, INSURANCE: true, ADDRESS: true, CUSTOM: true }, projects: {} };
   }
 }
 
@@ -225,22 +226,24 @@ server.registerTool('pii_glob', {
     const realPattern = sanitizer.restore(pattern);
     const realPath = searchPath ? resolvePath(sanitizer.restore(searchPath)) : WORK_DIR;
 
-    // Use find for portability
-    let output;
+    // Use Node.js built-in fs.promises.glob (Node 22+) for correct glob support.
+    // This handles **/*.js, src/**/*.ts, **/*.{js,ts} without any external deps.
+    let files;
     try {
-      const { stdout } = await execAsync(
-        `find ${JSON.stringify(realPath)} -type f -name ${JSON.stringify(realPattern.split('/').pop() ?? '*')} 2>/dev/null | sort`,
-        { cwd: WORK_DIR, timeout: 30000 }
-      );
-      output = stdout.trim();
+      const matchIter = nodeGlob(realPattern, { cwd: realPath, withFileTypes: false });
+      files = [];
+      for await (const f of matchIter) {
+        // nodeGlob returns paths relative to cwd — make absolute for clarity
+        files.push(path.isAbsolute(f) ? f : path.join(realPath, f));
+      }
+      files.sort();
     } catch (err) {
       return errorContent(scrubAndSave(err.message ?? String(err)));
     }
 
-    if (!output) output = '(no files found)';
-
+    const output = files.length > 0 ? files.join('\n') : '(no files found)';
     const scrubbed = scrubAndSave(output);
-    logTool('pii_glob', `pattern=${realPattern} → ${sanitizer.summary()}`);
+    logTool('pii_glob', `pattern=${realPattern} → ${files.length} files → ${sanitizer.summary()}`);
     return textContent(scrubbed);
   } catch (err) {
     return errorContent(scrubAndSave(String(err)));

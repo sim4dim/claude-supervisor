@@ -130,6 +130,35 @@
       margin-left: 6px; flex-shrink: 0;
     }
     .mobile-paste-btn:active { background: var(--accent); color: #fff; }
+
+    /* Scroll-to-bottom floating button */
+    .scroll-to-bottom-btn {
+      display: none; position: absolute; bottom: 12px; right: 12px; z-index: 20;
+      width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(196,149,106,0.4);
+      background: rgba(26,29,39,0.85); color: var(--accent); font-size: 16px;
+      cursor: pointer; align-items: center; justify-content: center;
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.5); transition: opacity 0.2s, transform 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .scroll-to-bottom-btn.visible { display: flex; }
+    .scroll-to-bottom-btn:hover { background: rgba(196,149,106,0.2); transform: scale(1.05); }
+    .scroll-to-bottom-btn:active { transform: scale(0.93); }
+    body.lcars .scroll-to-bottom-btn {
+      border-color: var(--accent); background: rgba(15,17,23,0.9);
+      box-shadow: 0 0 8px rgba(196,149,106,0.3);
+    }
+
+    /* Copy toast notification */
+    .copy-toast {
+      display: none; position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+      z-index: 9999; background: rgba(26,29,39,0.92); color: var(--text);
+      padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 500;
+      border: 1px solid var(--border); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      box-shadow: 0 2px 12px rgba(0,0,0,0.5); pointer-events: none;
+      transition: opacity 0.3s;
+    }
+    .copy-toast.visible { display: block; }
     .mobile-paste-area {
       position: fixed; top: -9999px; left: -9999px; opacity: 0; width: 1px; height: 1px;
     }
@@ -189,6 +218,20 @@
     .filter-btn.active { background: var(--surface2); color: var(--text); border-color: var(--text); }
     .filter-btn .proj-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: middle; }
 
+    .right-tab-bar {
+      display: flex; border-bottom: 1px solid var(--border); background: var(--bg);
+      flex-shrink: 0; padding: 0 12px;
+    }
+    .right-tab-btn {
+      padding: 8px 16px; font-size: 12px; font-weight: 600; color: var(--muted);
+      cursor: pointer; border: none; background: none; border-bottom: 2px solid transparent;
+      transition: all 0.15s; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .right-tab-btn:hover { color: var(--text); }
+    .right-tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .right-tab-pane { display: none; flex: 1; overflow: hidden; min-height: 0; }
+    .right-tab-pane.active { display: flex; flex-direction: column; }
+
     .approval-scroll {
       flex: 1; overflow: hidden; min-height: 0;
       display: flex; flex-direction: column; gap: 8px; padding: 8px 12px;
@@ -224,14 +267,15 @@
     .sv-panel-body { display: none; }
     .sv-panel-body.open { display: block; overflow-y: auto; min-height: 40px; flex: 1; scrollbar-width: thin; scrollbar-color: #444 #1a1a2e; }
     .panel-divider-h {
-      height: 6px; cursor: row-resize; flex-shrink: 0;
+      height: 8px; min-height: 8px; cursor: row-resize; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
+      margin: -4px 0; position: relative; z-index: 5;
     }
     .panel-divider-h::after {
-      content: ''; width: 30px; height: 2px; background: #333; border-radius: 1px;
+      content: ''; width: 30px; height: 2px; background: #333; border-radius: 1px; transition: background 0.15s;
     }
     .panel-divider-h:hover::after, .panel-divider-h.dragging::after {
-      background: #666;
+      background: #58a6ff;
     }
     .sv-panel-body.open::-webkit-scrollbar { width: 6px; }
     .sv-panel-body.open::-webkit-scrollbar-track { background: #1a1a2e; }
@@ -926,6 +970,9 @@ body.lcars .panel-divider:hover, body.lcars .panel-divider.dragging { background
 body.lcars .panel-divider::after { display: none; }
 body.lcars .panel-divider-h { height: 10px; background: var(--blue); }
 body.lcars .panel-divider-h::after { display: none; }
+body.lcars .right-tab-bar { background: var(--bg); border-bottom-color: var(--accent); }
+body.lcars .right-tab-btn { color: var(--yellow); font-family: 'Okuda', sans-serif; text-transform: uppercase; }
+body.lcars .right-tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 body.lcars .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
 body.lcars .dot.off { background: var(--red); }
 body.lcars .card {
@@ -1078,6 +1125,7 @@ body.lcars .dot.on { animation: lcars-pulse 2s ease-in-out infinite; }
       <div class="term-container" id="termContainer">
         <div class="term-empty" id="termEmpty">Click + New to launch a Claude session</div>
         <div class="drop-overlay" id="dropOverlay">Drop file here</div>
+        <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" title="Scroll to bottom" aria-label="Scroll to bottom">&#x25BC;</button>
       </div>
       <div class="term-statusbar" id="termStatusbar">
         <span id="termStatusRole"></span>
@@ -1094,24 +1142,31 @@ body.lcars .dot.on { animation: lcars-pulse 2s ease-in-out infinite; }
 
     <!-- Approval panel (right on desktop, toggled on mobile) -->
     <div class="approval-panel hidden-mobile" id="approvalPanel">
+      <!-- Pinned: Pending Approvals (visible in both tabs) -->
+      <div class="sv-panel" data-panel="approvals" draggable="false" style="margin:8px 12px 0;flex-shrink:0">
+        <div class="sv-panel-hdr" onclick="togglePanel('approvals')">
+          <div style="display:flex;align-items:center;gap:8px">
+            <h3>Pending Approvals</h3>
+            <span class="sv-panel-badge" id="approvalsBadge">0</span>
+          </div>
+          <span class="sv-panel-toggle" id="approvalsToggle">&#9660;</span>
+        </div>
+        <div class="sv-panel-body open" id="approvalsBody" style="padding:12px 16px;max-height:200px">
+          <div id="cards"><div class="empty">No pending approvals</div></div>
+        </div>
+      </div>
+
+      <div class="right-tab-bar">
+        <button class="right-tab-btn active" onclick="switchRightTab('ops')">Operations</button>
+        <button class="right-tab-btn" onclick="switchRightTab('config')">Configuration</button>
+      </div>
+
+      <div class="right-tab-pane active" id="rightTabOps">
       <div class="filter-bar" id="filterBar">
         <button class="filter-btn active" data-project="all" onclick="setFilter('all')">All</button>
       </div>
 
       <div class="approval-scroll">
-        <!-- Pending Approvals Panel -->
-        <div class="sv-panel" data-panel="approvals" draggable="false">
-          <div class="sv-panel-hdr" onclick="togglePanel('approvals')">
-            <div style="display:flex;align-items:center;gap:8px">
-              <h3>Pending Approvals</h3>
-              <span class="sv-panel-badge" id="approvalsBadge">0</span>
-            </div>
-            <span class="sv-panel-toggle" id="approvalsToggle">&#9660;</span>
-          </div>
-          <div class="sv-panel-body open" id="approvalsBody" style="padding:12px 16px">
-            <div id="cards"><div class="empty">No pending approvals</div></div>
-          </div>
-        </div>
 
         <!-- Operations Panel (Tasks + Feed) -->
         <div class="sv-panel" data-panel="operations" draggable="false">
@@ -1141,7 +1196,7 @@ body.lcars .dot.on { animation: lcars-pulse 2s ease-in-out infinite; }
 
         <!-- Eval History Panel -->
         <div class="sv-panel" data-panel="evalHistory" draggable="false">
-          <div class="sv-panel-hdr" onclick="togglePanel('evalHistory')">
+          <div class="sv-panel-hdr" onclick="toggleEvalHistory()">
             <div style="display:flex;align-items:center;gap:8px">
               <h3>Eval History</h3>
               <span class="sv-panel-badge" id="evalHistoryBadge">0</span>
@@ -1176,226 +1231,6 @@ body.lcars .dot.on { animation: lcars-pulse 2s ease-in-out infinite; }
           </div>
         </div>
 
-        <!-- Pensive Memory -->
-        <div class="sv-panel" data-panel="pensive" draggable="false">
-          <div class="sv-panel-hdr" onclick="togglePensive()">
-            <div style="display:flex;align-items:center;gap:8px">
-              <h3>Pensive</h3>
-              <span class="sv-panel-badge" id="pensiveBadge">0</span>
-            </div>
-            <span class="sv-panel-toggle" id="pensiveToggle">&#9654;</span>
-          </div>
-          <div class="sv-panel-body" id="pensiveBody">
-            <div style="padding:6px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-              <input type="text" id="pensiveSearch" placeholder="Search memories..." style="flex:1;min-width:120px;padding:4px 8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:12px;" onkeydown="if(event.key==='Enter')fetchPensive(true)">
-              <select id="pensiveScope" onchange="onPensiveScopeChange()" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
-                <option value="">All</option>
-                <option value="world">World</option>
-                <option value="project">Project</option>
-              </select>
-              <select id="pensiveProject" onchange="fetchPensive(true)" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
-                <option value="">All Projects</option>
-              </select>
-              <select id="pensiveType" onchange="fetchPensive(true)" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
-                <option value="">All Types</option>
-                <option value="discovery">Discovery</option>
-                <option value="fact">Fact</option>
-                <option value="infrastructure">Infra</option>
-                <option value="convention">Convention</option>
-                <option value="preference">Preference</option>
-                <option value="decision">Decision</option>
-                <option value="error">Error</option>
-              </select>
-              <button onclick="fetchPensive(true)" style="padding:4px 8px;background:#2563eb;border:none;border-radius:4px;color:white;font-size:11px;cursor:pointer;">Search</button>
-              <button onclick="togglePensiveForm()" style="padding:4px 8px;background:#22c55e;border:none;border-radius:4px;color:white;font-size:11px;cursor:pointer;font-weight:bold;" title="Add new memory">+</button>
-            </div>
-            <div id="pensiveForm" style="display:none;padding:8px 12px;border-bottom:1px solid #333;">
-              <textarea id="pensiveNewContent" rows="2" placeholder="Memory content..." style="width:100%;padding:6px 8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:12px;resize:vertical;box-sizing:border-box;"></textarea>
-              <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap;">
-                <select id="pensiveNewScope" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
-                  <option value="project">Project</option>
-                  <option value="world">World</option>
-                </select>
-                <select id="pensiveNewType" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
-                  <option value="fact">Fact</option>
-                  <option value="discovery">Discovery</option>
-                  <option value="infrastructure">Infrastructure</option>
-                  <option value="convention">Convention</option>
-                  <option value="preference">Preference</option>
-                  <option value="decision">Decision</option>
-                  <option value="error">Error</option>
-                </select>
-                <select id="pensiveNewTier" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
-                  <option value="L2">L2 (project)</option>
-                  <option value="L1">L1 (critical)</option>
-                  <option value="L3">L3 (archive)</option>
-                </select>
-                <button onclick="submitPensiveMemory()" style="padding:4px 10px;background:#2563eb;border:none;border-radius:4px;color:white;font-size:11px;cursor:pointer;">Save</button>
-                <button onclick="togglePensiveForm()" style="padding:4px 10px;background:#444;border:none;border-radius:4px;color:#ccc;font-size:11px;cursor:pointer;">Cancel</button>
-              </div>
-            </div>
-            <div id="pensiveList"><div style="padding:12px 16px;color:#555;font-size:12px;">Open to load memories</div></div>
-          </div>
-        </div>
-
-        <!-- PII Scrubbing Panel -->
-        <div class="sv-panel" data-panel="piiConfig" draggable="false">
-          <div class="sv-panel-hdr" onclick="togglePanel('piiConfig')">
-            <div style="display:flex;align-items:center;gap:8px">
-              <h3>PII Scrubbing</h3>
-              <span class="sv-panel-badge" id="piiConfigBadge" style="display:none">ON</span>
-            </div>
-            <span class="sv-panel-toggle" id="piiConfigToggle">&#9654;</span>
-          </div>
-          <div class="sv-panel-body" id="piiConfigBody">
-            <div style="padding:12px 16px;display:flex;flex-direction:column;gap:14px;">
-
-              <!-- Enable toggle -->
-              <div style="display:flex;align-items:center;justify-content:space-between;">
-                <span style="font-size:13px;font-weight:600;color:var(--text)">Enable PII Scrubbing</span>
-                <label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer;">
-                  <input type="checkbox" id="piiEnabled" style="opacity:0;width:0;height:0;" onchange="onPiiEnabledChange()">
-                  <span id="piiEnabledTrack" style="position:absolute;inset:0;background:#444;border-radius:12px;transition:background 0.2s;"></span>
-                  <span id="piiEnabledThumb" style="position:absolute;top:3px;left:3px;width:18px;height:18px;background:#fff;border-radius:50%;transition:transform 0.2s;"></span>
-                </label>
-              </div>
-
-              <!-- Path selector -->
-              <div>
-                <div class="section-title" style="margin-bottom:6px;">Scrub Path</div>
-                <div style="display:flex;flex-direction:column;gap:6px;">
-                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="radio" name="piiPath" id="piiPathMcp" value="mcp" style="accent-color:var(--accent);">
-                    MCP — tool wrapper, for Max plan <span style="color:var(--muted);font-size:11px;">(scrubs tool results before Claude sees them)</span>
-                  </label>
-                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="radio" name="piiPath" id="piiPathApi" value="api" style="accent-color:var(--accent);">
-                    API proxy — for API key deployments <span style="color:var(--muted);font-size:11px;">(scrubs /v1/messages before Anthropic)</span>
-                  </label>
-                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="radio" name="piiPath" id="piiPathBoth" value="both" style="accent-color:var(--accent);">
-                    Both — MCP + API proxy
-                  </label>
-                </div>
-              </div>
-
-              <!-- Mode selector -->
-              <div>
-                <div class="section-title" style="margin-bottom:6px;">Scrub Mode</div>
-                <div style="display:flex;flex-direction:column;gap:6px;">
-                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="radio" name="piiMode" id="piiModeStructured" value="structured" style="accent-color:var(--accent);">
-                    Structured — realistic fake values (preserves subnet math)
-                  </label>
-                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="radio" name="piiMode" id="piiModeToken" value="token" style="accent-color:var(--accent);">
-                    Token — bracket tokens like <code style="background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;">[IPv4-001]</code>
-                  </label>
-                </div>
-              </div>
-
-              <!-- Type toggles -->
-              <div>
-                <div class="section-title" style="margin-bottom:6px;">PII Types</div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="checkbox" id="piiTypeIPv4" style="accent-color:var(--accent);"> IPv4 Addresses
-                  </label>
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="checkbox" id="piiTypeIPv6" style="accent-color:var(--accent);"> IPv6 Addresses
-                  </label>
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="checkbox" id="piiTypeMAC" style="accent-color:var(--accent);"> MAC Addresses
-                  </label>
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="checkbox" id="piiTypeEMAIL" style="accent-color:var(--accent);"> Email Addresses
-                  </label>
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="checkbox" id="piiTypeHOST" style="accent-color:var(--accent);"> Internal Hostnames
-                  </label>
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="checkbox" id="piiTypePHONE" style="accent-color:var(--accent);"> Phone Numbers
-                  </label>
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="checkbox" id="piiTypeSSN" style="accent-color:var(--accent);"> SSN
-                  </label>
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
-                    <input type="checkbox" id="piiTypeNAME" style="accent-color:var(--accent);"> Names (context-triggered)
-                  </label>
-                </div>
-              </div>
-
-              <!-- Per-project overrides -->
-              <div>
-                <div class="section-title" style="margin-bottom:6px;">Per-Project Overrides</div>
-                <div id="piiProjectList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"></div>
-                <div id="piiAddProjectForm" style="display:none;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;margin-bottom:6px;">
-                  <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">New project override</div>
-                  <input type="text" id="piiNewProjectName" placeholder="project-name" style="width:100%;padding:4px 8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:var(--text);font-size:12px;box-sizing:border-box;margin-bottom:6px;">
-                  <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;flex-wrap:wrap;">
-                    <label style="font-size:11px;color:var(--muted);">Path:</label>
-                    <select id="piiNPPath" style="padding:3px 6px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:var(--text);font-size:11px;">
-                      <option value="">Global default</option>
-                      <option value="mcp">MCP</option>
-                      <option value="api">API proxy</option>
-                      <option value="both">Both</option>
-                    </select>
-                    <label style="font-size:11px;color:var(--muted);">Mode:</label>
-                    <select id="piiNewProjMode" style="padding:3px 6px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:var(--text);font-size:11px;">
-                      <option value="structured">Structured</option>
-                      <option value="token">Token</option>
-                    </select>
-                  </div>
-                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px;">
-                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
-                      <input type="checkbox" id="piiNPIPv4" checked style="accent-color:var(--accent);"> IPv4
-                    </label>
-                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
-                      <input type="checkbox" id="piiNPIPv6" checked style="accent-color:var(--accent);"> IPv6
-                    </label>
-                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
-                      <input type="checkbox" id="piiNPMAC" checked style="accent-color:var(--accent);"> MAC
-                    </label>
-                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
-                      <input type="checkbox" id="piiNPEMAIL" checked style="accent-color:var(--accent);"> Email
-                    </label>
-                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
-                      <input type="checkbox" id="piiNPHOST" checked style="accent-color:var(--accent);"> Host
-                    </label>
-                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
-                      <input type="checkbox" id="piiNPPHONE" checked style="accent-color:var(--accent);"> Phone
-                    </label>
-                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
-                      <input type="checkbox" id="piiNPSSN" checked style="accent-color:var(--accent);"> SSN
-                    </label>
-                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);">
-                      <input type="checkbox" id="piiNPNAME" checked style="accent-color:var(--accent);"> Names
-                    </label>
-                  </div>
-                  <div style="display:flex;gap:6px;">
-                    <button onclick="addPiiProjectOverride()" style="padding:4px 10px;background:var(--accent);border:none;border-radius:4px;color:#000;font-size:11px;font-weight:600;cursor:pointer;">Add</button>
-                    <button onclick="document.getElementById('piiAddProjectForm').style.display='none'" style="padding:4px 10px;background:#333;border:none;border-radius:4px;color:var(--muted);font-size:11px;cursor:pointer;">Cancel</button>
-                  </div>
-                </div>
-                <button onclick="document.getElementById('piiAddProjectForm').style.display=document.getElementById('piiAddProjectForm').style.display==='none'?'block':'none'" style="padding:4px 10px;background:#333;border:none;border-radius:4px;color:var(--muted);font-size:11px;cursor:pointer;">+ Add project</button>
-              </div>
-
-              <!-- Active sessions -->
-              <div>
-                <div class="section-title" style="margin-bottom:6px;">Active PII Sessions <button onclick="fetchPiiStats()" style="padding:1px 6px;background:#333;border:none;border-radius:3px;color:var(--muted);font-size:10px;cursor:pointer;margin-left:6px;">Refresh</button></div>
-                <div id="piiSessionsTable" style="font-size:11px;color:var(--muted);">Loading...</div>
-              </div>
-
-              <!-- Save button -->
-              <div style="display:flex;gap:8px;align-items:center;">
-                <button onclick="savePiiConfig()" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#000;font-size:13px;font-weight:600;cursor:pointer;">Save Config</button>
-                <span id="piiSaveStatus" style="font-size:11px;color:var(--green);display:none;">Saved</span>
-              </div>
-
-            </div>
-          </div>
-        </div>
-
         <!-- Team Chat Panel -->
         <div class="sv-panel" data-panel="teamChat" draggable="false">
           <div class="sv-panel-hdr" onclick="togglePanel('teamChat')">
@@ -1427,8 +1262,239 @@ body.lcars .dot.on { animation: lcars-pulse 2s ease-in-out infinite; }
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </div><!-- .approval-scroll -->
+      </div><!-- #rightTabOps -->
+
+      <div class="right-tab-pane" id="rightTabConfig">
+        <div class="approval-scroll config-scroll">
+
+          <!-- Hook Rules Panel -->
+          <div class="sv-panel" data-panel="hookRules" draggable="false">
+            <div class="sv-panel-hdr" onclick="togglePanel('hookRules')">
+              <div style="display:flex;align-items:center;gap:8px">
+                <h3>Hook Rules</h3>
+              </div>
+              <span class="sv-panel-toggle" id="hookRulesToggle">&#9654;</span>
+            </div>
+            <div class="sv-panel-body" id="hookRulesBody" style="padding:12px 16px">
+              <div id="hookRulesContent"><div class="empty">Loading rules...</div></div>
+            </div>
+          </div>
+
+          <!-- Eval & Proxy Config Panel -->
+          <div class="sv-panel" data-panel="ollamaConfig" draggable="false">
+            <div class="sv-panel-hdr" onclick="togglePanel('ollamaConfig')">
+              <div style="display:flex;align-items:center;gap:8px">
+                <h3>Eval &amp; Proxy</h3>
+                <span class="sv-panel-badge" id="ollamaStatusBadge">--</span>
+              </div>
+              <span class="sv-panel-toggle" id="ollamaConfigToggle">&#9654;</span>
+            </div>
+            <div class="sv-panel-body" id="ollamaConfigBody" style="padding:12px 16px">
+              <div id="ollamaConfigContent"><div class="empty">Loading...</div></div>
+            </div>
+          </div>
+
+          <!-- PII Scrubbing Panel -->
+          <div class="sv-panel" data-panel="piiConfig" draggable="false">
+            <div class="sv-panel-hdr" onclick="togglePanel('piiConfig')">
+              <div style="display:flex;align-items:center;gap:8px">
+                <h3>PII Scrubbing</h3>
+                <span class="sv-panel-badge" id="piiConfigBadge" style="display:none">ON</span>
+              </div>
+              <span class="sv-panel-toggle" id="piiConfigToggle">&#9654;</span>
+            </div>
+            <div class="sv-panel-body" id="piiConfigBody">
+              <div style="padding:12px 16px;display:flex;flex-direction:column;gap:14px;">
+
+                <!-- Per-project PII enable/disable -->
+                <div>
+                  <div class="section-title" style="margin-bottom:6px;">PII Scrubbing by Project <button onclick="fetchPiiProjects()" style="padding:1px 6px;background:#333;border:none;border-radius:3px;color:var(--muted);font-size:10px;cursor:pointer;margin-left:6px;">Refresh</button></div>
+                  <div id="piiProjectToggles" style="display:flex;flex-direction:column;gap:6px;">Loading...</div>
+                  <div style="margin-top:6px;font-size:11px;color:var(--muted);">Requires session restart to take effect.</div>
+                </div>
+
+                <!-- Path selector -->
+                <div>
+                  <div class="section-title" style="margin-bottom:6px;">Scrub Path</div>
+                  <div style="display:flex;flex-direction:column;gap:6px;">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="radio" name="piiPath" id="piiPathMcp" value="mcp" style="accent-color:var(--accent);">
+                      MCP — tool wrapper, for Max plan <span style="color:var(--muted);font-size:11px;">(scrubs tool results before Claude sees them)</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="radio" name="piiPath" id="piiPathApi" value="api" style="accent-color:var(--accent);">
+                      API proxy — for API key deployments <span style="color:var(--muted);font-size:11px;">(scrubs /v1/messages before Anthropic)</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="radio" name="piiPath" id="piiPathBoth" value="both" style="accent-color:var(--accent);">
+                      Both — MCP + API proxy
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Mode selector -->
+                <div>
+                  <div class="section-title" style="margin-bottom:6px;">Scrub Mode</div>
+                  <div style="display:flex;flex-direction:column;gap:6px;">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="radio" name="piiMode" id="piiModeStructured" value="structured" style="accent-color:var(--accent);">
+                      Structured — realistic fake values (preserves subnet math)
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="radio" name="piiMode" id="piiModeToken" value="token" style="accent-color:var(--accent);">
+                      Token — bracket tokens like <code style="background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;">[IPv4-001]</code>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Type toggles -->
+                <div>
+                  <div class="section-title" style="margin-bottom:6px;">PII Types</div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypeIPv4" style="accent-color:var(--accent);"> IPv4 Addresses
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypeIPv6" style="accent-color:var(--accent);"> IPv6 Addresses
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypeMAC" style="accent-color:var(--accent);"> MAC Addresses
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypeEMAIL" style="accent-color:var(--accent);"> Email Addresses
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypeHOST" style="accent-color:var(--accent);"> Internal Hostnames
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypePHONE" style="accent-color:var(--accent);"> Phone Numbers
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypeSSN" style="accent-color:var(--accent);"> SSN
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypeNAME" style="accent-color:var(--accent);"> Names (context-triggered)
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypeDOB" style="accent-color:var(--accent);"> Date of Birth (shows age)
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypeMRN" style="accent-color:var(--accent);"> Medical Record # (MRN)
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypeINSURANCE" style="accent-color:var(--accent);"> Insurance / Policy IDs
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text);">
+                      <input type="checkbox" id="piiTypeADDRESS" style="accent-color:var(--accent);"> Street Addresses
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Custom Patterns -->
+                <div>
+                  <div class="section-title" style="margin-bottom:6px;">Custom Patterns <button onclick="fetchPiiCustomPatterns()" style="padding:1px 6px;background:#333;border:none;border-radius:3px;color:var(--muted);font-size:10px;cursor:pointer;margin-left:6px;">Refresh</button></div>
+                  <div id="piiCustomPatternsList" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px;font-size:11px;color:var(--muted);">Loading...</div>
+                  <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
+                    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Add pattern</div>
+                    <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;flex-wrap:wrap;">
+                      <label style="font-size:11px;color:var(--muted);">Type:</label>
+                      <select id="piiCPType" style="padding:3px 6px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:var(--text);font-size:11px;">
+                        <option value="name">name (exact match)</option>
+                        <option value="regex">regex</option>
+                      </select>
+                    </div>
+                    <input type="text" id="piiCPValue" placeholder="Value or regex pattern" style="width:100%;padding:4px 8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:var(--text);font-size:12px;box-sizing:border-box;margin-bottom:6px;">
+                    <input type="text" id="piiCPLabel" placeholder="Label (optional, e.g. patient name)" style="width:100%;padding:4px 8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:var(--text);font-size:12px;box-sizing:border-box;margin-bottom:6px;">
+                    <div style="display:flex;gap:6px;">
+                      <button onclick="addPiiCustomPattern()" style="padding:4px 10px;background:var(--accent);border:none;border-radius:4px;color:#000;font-size:11px;font-weight:600;cursor:pointer;">Add</button>
+                    </div>
+                    <div id="piiCPStatus" style="font-size:11px;margin-top:4px;display:none;"></div>
+                  </div>
+                </div>
+
+
+                <!-- Active sessions -->
+                <div>
+                  <div class="section-title" style="margin-bottom:6px;">Active PII Sessions <button onclick="fetchPiiStats()" style="padding:1px 6px;background:#333;border:none;border-radius:3px;color:var(--muted);font-size:10px;cursor:pointer;margin-left:6px;">Refresh</button></div>
+                  <div id="piiSessionsTable" style="font-size:11px;color:var(--muted);">Loading...</div>
+                </div>
+
+                <!-- Save button -->
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <button onclick="savePiiConfig()" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#000;font-size:13px;font-weight:600;cursor:pointer;">Save Config</button>
+                  <span id="piiSaveStatus" style="font-size:11px;color:var(--green);display:none;">Saved</span>
+                </div>
+
+              </div>
+            </div>
+          </div>
+
+          <!-- Pensive Memory -->
+          <div class="sv-panel" data-panel="pensive" draggable="false">
+            <div class="sv-panel-hdr" onclick="togglePensive()">
+              <div style="display:flex;align-items:center;gap:8px">
+                <h3>Pensive</h3>
+                <span class="sv-panel-badge" id="pensiveBadge">0</span>
+              </div>
+              <span class="sv-panel-toggle" id="pensiveToggle">&#9654;</span>
+            </div>
+            <div class="sv-panel-body" id="pensiveBody">
+              <div style="padding:6px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                <input type="text" id="pensiveSearch" placeholder="Search memories..." style="flex:1;min-width:120px;padding:4px 8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:12px;" onkeydown="if(event.key==='Enter')fetchPensive(true)">
+                <select id="pensiveScope" onchange="onPensiveScopeChange()" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                  <option value="">All</option>
+                  <option value="world">World</option>
+                  <option value="project">Project</option>
+                </select>
+                <select id="pensiveProject" onchange="fetchPensive(true)" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                  <option value="">All Projects</option>
+                </select>
+                <select id="pensiveType" onchange="fetchPensive(true)" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                  <option value="">All Types</option>
+                  <option value="discovery">Discovery</option>
+                  <option value="fact">Fact</option>
+                  <option value="infrastructure">Infra</option>
+                  <option value="convention">Convention</option>
+                  <option value="preference">Preference</option>
+                  <option value="decision">Decision</option>
+                  <option value="error">Error</option>
+                </select>
+                <button onclick="fetchPensive(true)" style="padding:4px 8px;background:#2563eb;border:none;border-radius:4px;color:white;font-size:11px;cursor:pointer;">Search</button>
+                <button onclick="togglePensiveForm()" style="padding:4px 8px;background:#22c55e;border:none;border-radius:4px;color:white;font-size:11px;cursor:pointer;font-weight:bold;" title="Add new memory">+</button>
+              </div>
+              <div id="pensiveForm" style="display:none;padding:8px 12px;border-bottom:1px solid #333;">
+                <textarea id="pensiveNewContent" rows="2" placeholder="Memory content..." style="width:100%;padding:6px 8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:12px;resize:vertical;box-sizing:border-box;"></textarea>
+                <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap;">
+                  <select id="pensiveNewScope" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                    <option value="project">Project</option>
+                    <option value="world">World</option>
+                  </select>
+                  <select id="pensiveNewType" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                    <option value="fact">Fact</option>
+                    <option value="discovery">Discovery</option>
+                    <option value="infrastructure">Infrastructure</option>
+                    <option value="convention">Convention</option>
+                    <option value="preference">Preference</option>
+                    <option value="decision">Decision</option>
+                    <option value="error">Error</option>
+                  </select>
+                  <select id="pensiveNewTier" style="padding:4px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e4e4e7;font-size:11px;">
+                    <option value="L2">L2 (project)</option>
+                    <option value="L1">L1 (critical)</option>
+                    <option value="L3">L3 (archive)</option>
+                  </select>
+                  <button onclick="submitPensiveMemory()" style="padding:4px 10px;background:#2563eb;border:none;border-radius:4px;color:white;font-size:11px;cursor:pointer;">Save</button>
+                  <button onclick="togglePensiveForm()" style="padding:4px 10px;background:#444;border:none;border-radius:4px;color:#ccc;font-size:11px;cursor:pointer;">Cancel</button>
+                </div>
+              </div>
+              <div id="pensiveList"><div style="padding:12px 16px;color:#555;font-size:12px;">Open to load memories</div></div>
+            </div>
+          </div>
+
+        </div><!-- .approval-scroll.config-scroll -->
+      </div><!-- #rightTabConfig -->
+    </div><!-- #approvalPanel -->
   </div>
 
   <!-- Release Notes Modal -->
@@ -1461,6 +1527,9 @@ body.lcars .dot.on { animation: lcars-pulse 2s ease-in-out infinite; }
       <div class="doc-viewer-content" id="docViewerContent"></div>
     </div>
   </div>
+
+  <!-- Copy toast notification -->
+  <div class="copy-toast" id="copyToast">Copied!</div>
 
   <!-- New Terminal Dialog -->
   <div class="dialog-overlay" id="newTermDialog">
@@ -1625,6 +1694,8 @@ function handle(msg) {
         window._evalBackendLabel = backendLabel;
         window._svVersion = sv.version;
         window._confidenceThreshold = sv.confidenceThreshold;
+        window._svSupervisor = sv;
+        if (msg.ollamaHealth) { window._ollamaHealth = msg.ollamaHealth; renderOllamaConfig(); }
         if (msg.evalStats) {
           updateEvalStats(msg.evalStats, msg.serverStartedAt);
         } else {
@@ -1695,6 +1766,11 @@ function handle(msg) {
         window._globalRateLimits = msg.globalRateLimits;
         if (window._lastEvalStats) updateEvalStats(window._lastEvalStats, _serverStartedAt);
       }
+      if (msg.hookRules) renderHookRules(msg.hookRules);
+      if (msg.evalConfig) { window._evalConfig = msg.evalConfig; renderOllamaConfig(); }
+      break;
+    case 'hook_rules':
+      renderHookRules(msg.rules);
       break;
     case 'team_chat': {
       addTcMsg(msg);
@@ -1752,6 +1828,24 @@ function handle(msg) {
 
     case 'global_rate_limits':
       window._globalRateLimits = msg.limits;
+      if (window._lastEvalStats) updateEvalStats(window._lastEvalStats, _serverStartedAt);
+      break;
+
+    case 'ollama_health':
+      window._ollamaHealth = msg.health;
+      if (window._lastEvalStats) updateEvalStats(window._lastEvalStats, _serverStartedAt);
+      renderOllamaConfig();
+      break;
+
+    case 'eval_config':
+      window._evalConfig = msg.config;
+      renderOllamaConfig();
+      // Update mode label in supervisor bar
+      if (msg.config.mode) {
+        const m = document.getElementById('supervisorMode');
+        if (m) { m.textContent = msg.config.mode; m.className = 'mode-label ' + msg.config.mode; }
+      }
+      if (msg.config.confidenceThreshold !== undefined) window._confidenceThreshold = msg.config.confidenceThreshold;
       if (window._lastEvalStats) updateEvalStats(window._lastEvalStats, _serverStartedAt);
       break;
 
@@ -1963,6 +2057,9 @@ function openTerminalTab(id, project, status) {
     }
   });
 
+  // Scroll-to-bottom button tracking
+  attachScrollListener(id, xterm);
+
   // Subscribe is deferred — switchTerminalTab will fit/resize first,
   // then subscribe, so tmux reflows before we capture the screen.
   switchTerminalTab(id);
@@ -2020,6 +2117,7 @@ function switchTerminalTab(id) {
 
   renderTerminalTabs();
   updateTerminalStatusbar(id);
+  updateScrollToBottomBtn();
 }
 
 function closeTerminalTab(id) {
@@ -2125,6 +2223,149 @@ if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
   });
 }
 
+/* ── Scroll-to-bottom button ──────────────────────────── */
+const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
+
+function updateScrollToBottomBtn() {
+  if (!scrollToBottomBtn) return;
+  const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
+  if (!tab || !tab.xterm) {
+    scrollToBottomBtn.classList.remove('visible');
+    return;
+  }
+  const buf = tab.xterm.buffer.active;
+  // If viewportY < baseY the user has scrolled up
+  if (buf.viewportY < buf.baseY) {
+    scrollToBottomBtn.classList.add('visible');
+  } else {
+    scrollToBottomBtn.classList.remove('visible');
+  }
+}
+
+if (scrollToBottomBtn) {
+  scrollToBottomBtn.addEventListener('click', () => {
+    const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
+    if (tab && tab.xterm) tab.xterm.scrollToBottom();
+  });
+  // Also handle touch so iOS doesn't delay
+  scrollToBottomBtn.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
+    if (tab && tab.xterm) tab.xterm.scrollToBottom();
+  });
+}
+
+// Hook onScroll when a terminal is opened — called from openTerminalTab
+function attachScrollListener(id, xterm) {
+  xterm.onScroll(() => {
+    if (activeTerminalId === id) updateScrollToBottomBtn();
+  });
+}
+
+/* ── iOS long-press copy ──────────────────────────────── */
+let _copyToastTimer = null;
+function showCopyToast(msg) {
+  const toast = document.getElementById('copyToast');
+  if (!toast) return;
+  toast.textContent = msg || 'Copied!';
+  toast.classList.add('visible');
+  clearTimeout(_copyToastTimer);
+  _copyToastTimer = setTimeout(() => toast.classList.remove('visible'), 1500);
+}
+
+(function setupLongPressCopy() {
+  const container = document.getElementById('termContainer');
+  if (!container) return;
+
+  let longPressTimer = null;
+  let startX = 0, startY = 0;
+  const LONG_PRESS_MS = 500;
+  const MOVE_THRESHOLD = 10;
+
+  container.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    // Capture coordinates now — e.touches is live and may be empty in the async callback
+    const touchClientX = startX;
+    const touchClientY = startY;
+
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
+      if (!tab || !tab.xterm) return;
+      const xterm = tab.xterm;
+
+      // Prefer existing selection
+      const sel = xterm.getSelection();
+      if (sel && sel.trim()) {
+        navigator.clipboard.writeText(sel).then(() => showCopyToast('Copied!'), () => {});
+        return;
+      }
+
+      // Fall back: get word at touch position from buffer
+      const termEl = container.querySelector('.xterm');
+      if (!termEl) return;
+      const rect = termEl.getBoundingClientRect();
+
+      // Approximate cell size from xterm internals
+      const core = xterm._core;
+      const cellW = core ? (core._renderService && core._renderService.dimensions
+        ? core._renderService.dimensions.actualCellWidth
+        : (rect.width / xterm.cols)) : (rect.width / xterm.cols);
+      const cellH = core ? (core._renderService && core._renderService.dimensions
+        ? core._renderService.dimensions.actualCellHeight
+        : (rect.height / xterm.rows)) : (rect.height / xterm.rows);
+
+      const col = Math.floor((touchClientX - rect.left) / cellW);
+      const row = Math.floor((touchClientY - rect.top) / cellH);
+      const buf = xterm.buffer.active;
+      const line = buf.getLine(buf.viewportY + row);
+      if (!line) return;
+
+      let lineText = '';
+      for (let c = 0; c < xterm.cols; c++) {
+        const cell = line.getCell(c);
+        lineText += cell ? (cell.getChars() || ' ') : ' ';
+      }
+
+      // Extract word around col
+      const wordRe = /\S+/g;
+      let match;
+      let word = '';
+      while ((match = wordRe.exec(lineText)) !== null) {
+        if (match.index <= col && col < match.index + match[0].length) {
+          word = match[0].trim();
+          break;
+        }
+      }
+
+      if (word) {
+        navigator.clipboard.writeText(word).then(() => showCopyToast('Copied!'), () => {});
+      }
+    }, LONG_PRESS_MS);
+  }, { passive: true });
+
+  container.addEventListener('touchmove', (e) => {
+    if (!longPressTimer) return;
+    if (e.touches.length !== 1) { clearTimeout(longPressTimer); longPressTimer = null; return; }
+    const dx = Math.abs(e.touches[0].clientX - startX);
+    const dy = Math.abs(e.touches[0].clientY - startY);
+    if (dx > MOVE_THRESHOLD || dy > MOVE_THRESHOLD) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }, { passive: true });
+
+  container.addEventListener('touchend', () => {
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  }, { passive: true });
+
+  container.addEventListener('touchcancel', () => {
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  }, { passive: true });
+})();
+
 function restartTerminal(id) {
   const tab = terminalTabs.get(id);
   if (!tab) return;
@@ -2192,14 +2433,6 @@ function renderTerminalTabs() {
       else if (pct <= 50) { tc.style.background = 'var(--surface2)'; tc.style.color = 'var(--muted)'; tc.title = 'Context ' + pct + '% remaining'; }
       else { tc.style.background = 'var(--surface2)'; tc.style.color = 'var(--muted)'; tc.title = 'Context ' + pct + '% remaining'; }
       el.appendChild(tc);
-    } else if (tab.turnCount > 0) {
-      const tc = document.createElement('span');
-      tc.textContent = 't' + tab.turnCount;
-      tc.style.cssText = 'font-size:10px;font-weight:700;padding:1px 5px;border-radius:6px;margin-left:4px;';
-      if (tab.turnCount >= 18) { tc.style.background = 'var(--red)'; tc.style.color = '#fff'; tc.title = 'Context very large — compaction likely imminent'; }
-      else if (tab.turnCount >= 12) { tc.style.background = 'var(--yellow)'; tc.style.color = '#000'; tc.title = 'Context getting large'; }
-      else { tc.style.background = 'var(--surface2)'; tc.style.color = 'var(--muted)'; tc.title = 'Turn count'; }
-      el.appendChild(tc);
     }
 
     if (tab.claudeVersion && claudeVersionInfo.installed && tab.claudeVersion !== claudeVersionInfo.installed) {
@@ -2261,14 +2494,13 @@ function updateTerminalStatusbar(id) {
   }
 
   const statusText = tab.status === 'exited' ? ' [exited]' : '';
-  const turnText = tab.turnCount > 0 ? ' | turns: ' + tab.turnCount : '';
   const ctxText = tab.contextPercent != null ? ' | ctx: ' + tab.contextPercent + '%' : '';
   const compactWarn = tab.contextPercent != null && tab.contextPercent <= 10
     ? ' ⚠ compaction imminent'
     : tab.contextPercent != null && tab.contextPercent <= 25
       ? ' ⚠ context low'
-      : tab.turnCount >= 18 ? ' ⚠ compaction imminent' : tab.turnCount >= 12 ? ' ⚠ context growing' : '';
-  projEl.textContent = tab.project + ' #' + id + statusText + turnText + ctxText + compactWarn;
+      : '';
+  projEl.textContent = tab.project + ' #' + id + statusText + ctxText + compactWarn;
   actionsEl.style.display = 'flex';
 
   // Update restart button with version hint
@@ -2822,6 +3054,31 @@ function updateEvalStats(stats, serverStartedAt) {
   // Build base status as escaped text, then append colored rate limits as HTML
   const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
   let html = esc(parts.join(' \u2502 '));
+
+  // Ollama health panel (colored HTML)
+  const oh = window._ollamaHealth;
+  if (oh) {
+    let ollamaHtml;
+    if (oh.status === 'down') {
+      ollamaHtml = '<span style="color:var(--red);font-weight:600">ollama DOWN</span>';
+    } else if (oh.status === 'ok') {
+      const modelNames = (oh.models || []).map(m => m.name.replace(/:latest$/, '')).join(', ');
+      let parts2 = [esc(modelNames || 'no models')];
+      if (oh.vramUsed > 0) {
+        const usedGB = (oh.vramUsed / (1024 * 1024 * 1024)).toFixed(1);
+        parts2.push(usedGB + 'G');
+      }
+      // Eval queue: active+queued / max
+      if (oh.maxConcurrent) {
+        const busy = (oh.activeEvals || 0) + (oh.queuedEvals || 0);
+        const max = oh.maxConcurrent;
+        const qColor = busy === 0 ? 'var(--green)' : busy <= max ? 'var(--yellow)' : 'var(--red)';
+        parts2.push('<span style="color:' + qColor + ';font-weight:600">' + busy + '/' + max + 'q</span>');
+      }
+      ollamaHtml = parts2.join(' ');
+    }
+    if (ollamaHtml) html += ' \u2502 ' + ollamaHtml;
+  }
 
   // Rate limits from API headers (globalRateLimits) or /usage terminal output (_lastRateLimits)
   const grl = window._globalRateLimits;
@@ -3467,7 +3724,6 @@ function startUpdate() {
 })();
 
 /* ── Eval History ──────────────────────────────────────── */
-let evalHistoryCollapsed = true;
 let evalHistoryCache = null;
 let evalHistoryDecision = '';
 
@@ -3550,7 +3806,7 @@ function handleEvalResolved(msg) {
   if (msg.decidedBy !== 'ai' || evalHistoryCache === null) return;
   // The approval_resolved message doesn't carry all fields, so just refresh
   evalHistoryCache = null;
-  if (!evalHistoryCollapsed) fetchEvalHistory(true);
+  if (panelState.evalHistory) fetchEvalHistory(true);
 }
 
 // Patch projColor for eval history (projColor is defined above as projColor)
@@ -4061,6 +4317,7 @@ function linkifyDocRefs(text) {
 const panelState = {};
 
 function togglePanel(name) {
+  if (_suppressNextToggle) return;
   panelState[name] = !panelState[name];
   const body = document.getElementById(name + 'Body');
   const toggle = document.getElementById(name + 'Toggle');
@@ -4071,16 +4328,18 @@ function togglePanel(name) {
       panel.classList.toggle('panel-open', panelState[name]);
       if (panelState[name]) {
         // Reset to auto flex so it rejoins equal distribution
-        panel.style.flex = '';
-        panel.style.flexBasis = '';
+        panel.style.removeProperty('flex');
+        panel.style.removeProperty('height');
+        panel.style.removeProperty('min-height');
       }
     }
   }
   if (toggle) toggle.innerHTML = panelState[name] ? '&#9660;' : '&#9654;';
   // Redistribute: clear all open panels' inline sizes so CSS flex handles layout
   document.querySelectorAll('.sv-panel.panel-open').forEach(p => {
-    p.style.flex = '';
-    p.style.flexBasis = '';
+    p.style.removeProperty('flex');
+    p.style.removeProperty('height');
+    p.style.removeProperty('min-height');
   });
   savePanelOrder();
   initPanelDividers();
@@ -4088,6 +4347,7 @@ function togglePanel(name) {
 
 let dragPanel = null;
 
+let _suppressNextToggle = false;
 function initPanelDrag() {
   document.querySelectorAll('.sv-panel').forEach(panel => {
     // Only the header initiates drag — body content stays selectable
@@ -4095,6 +4355,7 @@ function initPanelDrag() {
     if (hdr) {
       hdr.draggable = true;
       hdr.addEventListener('dragstart', e => {
+        _suppressNextToggle = true;
         dragPanel = panel;
         panel.classList.add('dragging');
         e.dataTransfer.effectAllowed = 'move';
@@ -4105,6 +4366,8 @@ function initPanelDrag() {
       document.querySelectorAll('.sv-panel.drag-over').forEach(p => p.classList.remove('drag-over'));
       dragPanel = null;
       savePanelOrder();
+      // Reset suppress flag after a tick (click fires after dragend)
+      setTimeout(() => { _suppressNextToggle = false; }, 50);
     });
     panel.addEventListener('dragover', e => {
       e.preventDefault();
@@ -4130,8 +4393,16 @@ function initPanelDrag() {
   });
 }
 
+function switchRightTab(tab) {
+  document.querySelectorAll('.right-tab-btn').forEach(b => b.classList.toggle('active', b.textContent.toLowerCase().startsWith(tab === 'ops' ? 'op' : 'con')));
+  document.getElementById('rightTabOps').classList.toggle('active', tab === 'ops');
+  document.getElementById('rightTabConfig').classList.toggle('active', tab === 'config');
+  // Re-init dividers for the visible tab
+  initPanelDividers();
+}
+
 function initPanelDividers() {
-  const container = document.querySelector('.approval-scroll');
+  const container = document.querySelector('.right-tab-pane.active .approval-scroll');
   if (!container) return;
 
   // Remove any existing dividers
@@ -4160,28 +4431,37 @@ function initPanelDividers() {
 
       e.preventDefault();
       divider.classList.add('dragging');
+      document.body.style.cursor = 'row-resize';
+      document.body.style.userSelect = 'none';
 
-      // Snapshot starting sizes
-      let startY = e.clientY;
-      let aboveH = above.getBoundingClientRect().height;
-      let belowH = below.getBoundingClientRect().height;
+      // Snapshot starting sizes — use explicit pixel heights, not flex ratios
+      const startY = e.clientY;
+      const aboveH = above.getBoundingClientRect().height;
+      const belowH = below.getBoundingClientRect().height;
       const MIN = 60;
 
       function onMouseMove(ev) {
         const delta = ev.clientY - startY;
-        let newAbove = aboveH + delta;
-        let newBelow = belowH - delta;
-        if (newAbove < MIN) { newAbove = MIN; newBelow = aboveH + belowH - MIN; }
-        if (newBelow < MIN) { newBelow = MIN; newAbove = aboveH + belowH - MIN; }
-        const total = newAbove + newBelow;
-        above.style.flex = `${newAbove / total} 1 0`;
-        above.style.flexBasis = '0';
-        below.style.flex = `${newBelow / total} 1 0`;
-        below.style.flexBasis = '0';
+        let newAbove = Math.max(MIN, aboveH + delta);
+        let newBelow = Math.max(MIN, belowH - delta);
+        // Clamp so total stays the same
+        const total = aboveH + belowH;
+        if (newAbove + newBelow !== total) {
+          if (delta > 0) newBelow = total - newAbove;
+          else newAbove = total - newBelow;
+        }
+        above.style.setProperty('flex', 'none', 'important');
+        above.style.setProperty('height', newAbove + 'px', 'important');
+        above.style.setProperty('min-height', MIN + 'px', 'important');
+        below.style.setProperty('flex', 'none', 'important');
+        below.style.setProperty('height', newBelow + 'px', 'important');
+        below.style.setProperty('min-height', MIN + 'px', 'important');
       }
 
       function onMouseUp() {
         divider.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
         document.removeEventListener('mousemove', onMouseMove);
         document.removeEventListener('mouseup', onMouseUp);
         savePanelOrder();
@@ -4193,10 +4473,38 @@ function initPanelDividers() {
 
     divider.addEventListener('dblclick', () => {
       document.querySelectorAll('.sv-panel.panel-open').forEach(p => {
-        p.style.flex = '';
-        p.style.flexBasis = '';
+        p.style.removeProperty('flex');
+        p.style.removeProperty('height');
+        p.style.removeProperty('min-height');
       });
       savePanelOrder();
+    });
+
+    // Forward drag-reorder events to nearest panel so drops on dividers/gaps work
+    divider.addEventListener('dragover', e => {
+      e.preventDefault();
+      const target = divider.nextElementSibling;
+      if (target && target.classList.contains('sv-panel') && target !== dragPanel) {
+        target.classList.add('drag-over');
+      }
+    });
+    divider.addEventListener('dragleave', () => {
+      const target = divider.nextElementSibling;
+      if (target) target.classList.remove('drag-over');
+    });
+    divider.addEventListener('drop', e => {
+      e.preventDefault();
+      const target = divider.nextElementSibling;
+      if (target && target.classList.contains('sv-panel') && dragPanel && dragPanel !== target) {
+        target.classList.remove('drag-over');
+        const container = target.parentNode;
+        const panels = [...container.querySelectorAll('.sv-panel')];
+        const fromIdx = panels.indexOf(dragPanel);
+        const toIdx = panels.indexOf(target);
+        if (fromIdx < toIdx) target.after(dragPanel);
+        else target.before(dragPanel);
+        initPanelDividers();
+      }
     });
   }
 }
@@ -4207,8 +4515,8 @@ function savePanelOrder() {
   const heights = {};
   for (const name of order) {
     const panel = document.querySelector(`.sv-panel[data-panel="${name}"]`);
-    if (panel && panel.style.flex && panel.style.flex !== '') {
-      heights[name] = panel.style.flex;
+    if (panel && panel.style.height) {
+      heights[name] = panel.style.height;
     }
   }
   localStorage.setItem('sv_panel_order', JSON.stringify(order));
@@ -4234,11 +4542,12 @@ function restorePanelOrder() {
     // Deduplicate
     openPanels = [...new Set(openPanels)];
 
-    const container = document.querySelector('.approval-scroll');
-    if (order.length && container) {
+    // Only reorder panels within the ops container (config tab has fixed order)
+    const opsContainer = document.querySelector('#rightTabOps .approval-scroll');
+    if (order.length && opsContainer) {
       for (const name of order) {
-        const panel = container.querySelector(`[data-panel="${name}"]`);
-        if (panel) container.appendChild(panel);
+        const panel = opsContainer.querySelector(`[data-panel="${name}"]`);
+        if (panel) opsContainer.appendChild(panel);
       }
     }
     // Default open panels if nothing in localStorage
@@ -4256,7 +4565,10 @@ function restorePanelOrder() {
       if (toggle) toggle.innerHTML = '&#9660;';
       if (heights[name]) {
         const panel = document.querySelector(`.sv-panel[data-panel="${name}"]`);
-        if (panel) { panel.style.flex = heights[name]; panel.style.flexBasis = '0'; }
+        if (panel) {
+          panel.style.setProperty('flex', 'none', 'important');
+          panel.style.setProperty('height', heights[name], 'important');
+        }
       }
     }
   } catch(e) {}
@@ -4417,26 +4729,14 @@ restorePanelOrder();
 initPanelDrag();
 initPanelDividers();
 fetchAllProjects();
+// Fetch data for panels that were restored as open on page load
+if (panelState.evalHistory) fetchEvalHistory(false);
 
 /* ── PII Scrubbing Panel ─────────────────────────────── */
 let piiConfigState = null; // in-memory working copy
 
-function onPiiEnabledChange() {
-  const enabled = document.getElementById('piiEnabled').checked;
-  const track = document.getElementById('piiEnabledTrack');
-  const thumb = document.getElementById('piiEnabledThumb');
-  const badge = document.getElementById('piiConfigBadge');
-  track.style.background = enabled ? 'var(--green)' : '#444';
-  thumb.style.transform = enabled ? 'translateX(20px)' : 'translateX(0)';
-  badge.style.display = enabled ? 'inline-block' : 'none';
-}
-
 function applyPiiConfig(cfg) {
   piiConfigState = cfg;
-  // Enabled toggle
-  const enabledCb = document.getElementById('piiEnabled');
-  enabledCb.checked = !!cfg.enabled;
-  onPiiEnabledChange();
   // Path
   const pathEl = document.querySelector(`input[name="piiPath"][value="${cfg.path || 'mcp'}"]`);
   if (pathEl) pathEl.checked = true;
@@ -4453,81 +4753,96 @@ function applyPiiConfig(cfg) {
   document.getElementById('piiTypePHONE').checked = !!types.PHONE;
   document.getElementById('piiTypeSSN').checked = types.SSN !== false;
   document.getElementById('piiTypeNAME').checked = types.NAME !== false;
-  // Projects
-  renderPiiProjects(cfg.projects || {});
+  document.getElementById('piiTypeDOB').checked = types.DOB !== false;
+  document.getElementById('piiTypeMRN').checked = types.MRN !== false;
+  document.getElementById('piiTypeINSURANCE').checked = types.INSURANCE !== false;
+  document.getElementById('piiTypeADDRESS').checked = types.ADDRESS !== false;
+  // Custom patterns
+  renderPiiCustomPatterns(cfg.customPatterns || []);
 }
 
-function renderPiiProjects(projects) {
-  const list = document.getElementById('piiProjectList');
-  const entries = Object.entries(projects);
-  if (entries.length === 0) {
-    list.innerHTML = '<div style="font-size:11px;color:var(--muted);">No per-project overrides</div>';
-    return;
-  }
-  list.innerHTML = entries.map(([name, ov]) => {
-    const types = Object.entries(ov.types || {}).filter(([,v]) => v).map(([k]) => k).join(', ') || 'none';
-    return `<div style="display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,0.2);border-radius:4px;padding:5px 8px;">
-      <div>
-        <span style="font-size:12px;font-weight:600;color:var(--text);">${name}</span>
-        <span style="font-size:10px;color:var(--muted);margin-left:6px;">${ov.path ? ov.path + ' · ' : ''}${ov.mode || 'structured'} · ${types}</span>
-      </div>
-      <button onclick="removePiiProject('${name}')" style="padding:2px 6px;background:#333;border:none;border-radius:3px;color:var(--red);font-size:11px;cursor:pointer;">✕</button>
-    </div>`;
-  }).join('');
-}
-
-function removePiiProject(name) {
-  if (!piiConfigState) return;
-  const projects = Object.assign({}, piiConfigState.projects || {});
-  delete projects[name];
-  piiConfigState.projects = projects;
-  renderPiiProjects(projects);
-}
-
-function addPiiProjectOverride() {
-  const name = document.getElementById('piiNewProjectName').value.trim();
-  if (!name) { alert('Enter a project name'); return; }
-  if (!piiConfigState) piiConfigState = { enabled: false, mode: 'structured', types: {}, projects: {} };
-  const projects = Object.assign({}, piiConfigState.projects || {});
-  const projPath = document.getElementById('piiNPPath').value;
-  projects[name] = {
-    ...(projPath ? { path: projPath } : {}),
-    mode: document.getElementById('piiNewProjMode').value,
-    types: {
-      IPv4: document.getElementById('piiNPIPv4').checked,
-      IPv6: document.getElementById('piiNPIPv6').checked,
-      MAC:  document.getElementById('piiNPMAC').checked,
-      EMAIL: document.getElementById('piiNPEMAIL').checked,
-      HOST: document.getElementById('piiNPHOST').checked,
-      PHONE: document.getElementById('piiNPPHONE').checked,
-      SSN:   document.getElementById('piiNPSSN')?.checked ?? true,
-      NAME:  document.getElementById('piiNPNAME')?.checked ?? true,
+async function fetchPiiProjects() {
+  const el = document.getElementById('piiProjectToggles');
+  try {
+    const r = await fetch('/api/pii/projects');
+    if (!r.ok) { el.textContent = 'Failed to load'; return; }
+    const projects = await r.json();
+    // Update badge
+    const anyEnabled = projects.some(p => p.piiEnabled);
+    const badge = document.getElementById('piiConfigBadge');
+    if (badge) { badge.style.display = anyEnabled ? 'inline-block' : 'none'; }
+    if (projects.length === 0) {
+      el.innerHTML = '<div style="font-size:11px;color:var(--muted);">No active sessions found</div>';
+      return;
     }
-  };
-  piiConfigState.projects = projects;
-  renderPiiProjects(projects);
-  document.getElementById('piiNewProjectName').value = '';
-  document.getElementById('piiAddProjectForm').style.display = 'none';
+    el.innerHTML = projects.map(p => {
+      const toggleId = `piiToggle_${p.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      const on = p.piiEnabled;
+      const sup = p.name === 'claude-supervisor';
+      return `<div style="display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,0.2);border-radius:4px;padding:6px 10px;">
+        <div>
+          <span style="font-size:12px;font-weight:600;color:var(--text);">${esc(p.name)}</span>
+          ${sup ? '<span style="font-size:10px;color:var(--muted);margin-left:6px;">(supervisor — always on)</span>' : ''}
+        </div>
+        <label style="position:relative;display:inline-block;width:40px;height:22px;cursor:${sup ? 'not-allowed' : 'pointer'};" title="${sup ? 'Supervisor is exempt from PII redirection' : (on ? 'Click to disable PII for this project' : 'Click to enable PII for this project')}">
+          <input type="checkbox" id="${toggleId}" ${on ? 'checked' : ''} ${sup ? 'disabled' : ''} style="opacity:0;width:0;height:0;" onchange="togglePiiProject('${esc(p.name)}', this.checked)">
+          <span style="position:absolute;inset:0;background:${on ? 'var(--green)' : '#444'};border-radius:11px;transition:background 0.2s;"></span>
+          <span style="position:absolute;top:3px;left:${on ? '21px' : '3px'};width:16px;height:16px;background:#fff;border-radius:50%;transition:left 0.2s;"></span>
+        </label>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function togglePiiProject(name, enable) {
+  const action = enable ? 'enable' : 'disable';
+  try {
+    const r = await fetch(`/api/pii/projects/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) {
+      alert('Error: ' + (data.error || r.statusText));
+      fetchPiiProjects(); // re-render to reset toggle state
+    } else {
+      if (data.requiresRestart) {
+        // Show brief notice
+        const el = document.getElementById('piiProjectToggles');
+        const note = document.createElement('div');
+        note.style.cssText = 'font-size:11px;color:var(--yellow);padding:4px 0;';
+        note.textContent = `PII ${enable ? 'enabled' : 'disabled'} for ${name}. Restart session to take effect.`;
+        el.insertAdjacentElement('afterend', note);
+        setTimeout(() => note.remove(), 4000);
+      }
+      fetchPiiProjects(); // refresh to sync toggle visuals
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+    fetchPiiProjects();
+  }
 }
 
 function buildPiiConfigFromForm() {
   const pathEl = document.querySelector('input[name="piiPath"]:checked');
   const modeEl = document.querySelector('input[name="piiMode"]:checked');
   return {
-    enabled: document.getElementById('piiEnabled').checked,
     path: pathEl ? pathEl.value : 'mcp',
     mode: modeEl ? modeEl.value : 'structured',
     types: {
-      IPv4:  document.getElementById('piiTypeIPv4').checked,
-      IPv6:  document.getElementById('piiTypeIPv6').checked,
-      MAC:   document.getElementById('piiTypeMAC').checked,
-      EMAIL: document.getElementById('piiTypeEMAIL').checked,
-      HOST:  document.getElementById('piiTypeHOST').checked,
-      PHONE: document.getElementById('piiTypePHONE').checked,
-      SSN:   document.getElementById('piiTypeSSN').checked,
-      NAME:  document.getElementById('piiTypeNAME').checked,
+      IPv4:      document.getElementById('piiTypeIPv4').checked,
+      IPv6:      document.getElementById('piiTypeIPv6').checked,
+      MAC:       document.getElementById('piiTypeMAC').checked,
+      EMAIL:     document.getElementById('piiTypeEMAIL').checked,
+      HOST:      document.getElementById('piiTypeHOST').checked,
+      PHONE:     document.getElementById('piiTypePHONE').checked,
+      SSN:       document.getElementById('piiTypeSSN').checked,
+      NAME:      document.getElementById('piiTypeNAME').checked,
+      DOB:       document.getElementById('piiTypeDOB').checked,
+      MRN:       document.getElementById('piiTypeMRN').checked,
+      INSURANCE: document.getElementById('piiTypeINSURANCE').checked,
+      ADDRESS:   document.getElementById('piiTypeADDRESS').checked,
     },
-    projects: (piiConfigState && piiConfigState.projects) ? piiConfigState.projects : {},
+    customPatterns: (piiConfigState && piiConfigState.customPatterns) ? piiConfigState.customPatterns : [],
   };
 }
 
@@ -4594,6 +4909,268 @@ async function savePiiConfig() {
   }
 }
 
+function renderPiiCustomPatterns(patterns) {
+  const el = document.getElementById('piiCustomPatternsList');
+  if (!el) return;
+  if (!patterns || patterns.length === 0) {
+    el.innerHTML = '<span style="color:var(--muted)">No custom patterns</span>';
+    return;
+  }
+  el.innerHTML = patterns.map((p, i) => {
+    const typeColor = p.type === 'name' ? 'var(--blue)' : 'var(--yellow)';
+    const label = p.label ? ` <span style="color:var(--muted)">— ${esc(p.label)}</span>` : '';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,0.2);border-radius:4px;padding:5px 8px;">
+      <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;">
+        <span style="font-size:10px;color:${typeColor};font-weight:600;text-transform:uppercase;margin-right:4px;">${esc(p.type)}</span>
+        <span style="font-family:monospace;font-size:11px;color:var(--text);">${esc(p.value)}</span>${label}
+      </div>
+      <button onclick="removePiiCustomPattern(${i})" style="padding:2px 6px;background:#333;border:none;border-radius:3px;color:var(--red);font-size:11px;cursor:pointer;margin-left:6px;flex-shrink:0;">x</button>
+    </div>`;
+  }).join('');
+}
+
+async function fetchPiiCustomPatterns() {
+  try {
+    const r = await fetch('/api/pii/custom-patterns');
+    if (r.ok) {
+      const patterns = await r.json();
+      if (piiConfigState) piiConfigState.customPatterns = patterns;
+      renderPiiCustomPatterns(patterns);
+    }
+  } catch {}
+}
+
+async function addPiiCustomPattern() {
+  const type = document.getElementById('piiCPType').value;
+  const value = document.getElementById('piiCPValue').value.trim();
+  const label = document.getElementById('piiCPLabel').value.trim();
+  const statusEl = document.getElementById('piiCPStatus');
+  if (!value) { statusEl.textContent = 'Enter a value'; statusEl.style.color = 'var(--red)'; statusEl.style.display = 'block'; return; }
+  try {
+    const r = await fetch('/api/pii/custom-patterns/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, value, label }),
+    });
+    const data = await r.json();
+    if (r.ok) {
+      document.getElementById('piiCPValue').value = '';
+      document.getElementById('piiCPLabel').value = '';
+      if (piiConfigState) piiConfigState.customPatterns = data.patterns;
+      renderPiiCustomPatterns(data.patterns);
+      statusEl.textContent = 'Added';
+      statusEl.style.color = 'var(--green)';
+      statusEl.style.display = 'block';
+      setTimeout(() => { statusEl.style.display = 'none'; }, 2000);
+    } else {
+      statusEl.textContent = 'Error: ' + (data.error || r.statusText);
+      statusEl.style.color = 'var(--red)';
+      statusEl.style.display = 'block';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+    statusEl.style.color = 'var(--red)';
+    statusEl.style.display = 'block';
+  }
+}
+
+async function removePiiCustomPattern(index) {
+  try {
+    const r = await fetch(`/api/pii/custom-patterns/${index}`, { method: 'DELETE' });
+    const data = await r.json();
+    if (r.ok) {
+      if (piiConfigState) piiConfigState.customPatterns = data.patterns;
+      renderPiiCustomPatterns(data.patterns);
+    }
+  } catch {}
+}
+
+function renderHookRules(rules) {
+  const el = document.getElementById('hookRulesContent');
+  if (!el || !rules) return;
+
+  let html = '';
+
+  // Auto-denied (show first — most important for users to understand)
+  html += '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--red);text-transform:uppercase;margin-bottom:6px">Blocked</div>';
+  html += '<table style="width:100%;font-size:12px"><tbody>';
+  for (const r of rules.autoDenied || []) {
+    html += '<tr><td style="padding:3px 8px 3px 0;color:var(--red);font-family:var(--mono);white-space:nowrap;font-size:11px">' + esc(r.pattern) + '</td><td style="padding:3px 0;color:var(--muted)">' + esc(r.description) + '</td></tr>';
+  }
+  html += '</tbody></table></div>';
+
+  // Auto-approved tools
+  html += '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--green);text-transform:uppercase;margin-bottom:6px">Auto-approved Tools</div>';
+  html += '<table style="width:100%;font-size:12px"><tbody>';
+  for (const r of rules.autoApprovedTools || []) {
+    html += '<tr><td style="padding:3px 8px 3px 0;color:var(--green);font-family:var(--mono);white-space:nowrap;font-size:11px">' + esc(r.pattern) + '</td><td style="padding:3px 0;color:var(--muted)">' + esc(r.description) + '</td></tr>';
+  }
+  html += '</tbody></table></div>';
+
+  // Auto-approved bash categories
+  html += '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--green);text-transform:uppercase;margin-bottom:6px">Auto-approved Commands</div>';
+  html += '<table style="width:100%;font-size:12px"><tbody>';
+  for (const r of rules.autoApprovedBash || []) {
+    html += '<tr><td style="padding:3px 8px 3px 0;color:var(--accent);white-space:nowrap;font-size:11px;font-weight:600">' + esc(r.category) + '</td><td style="padding:3px 0;color:var(--muted);font-size:11px">' + esc(r.commands) + '</td></tr>';
+  }
+  html += '</tbody></table></div>';
+
+  // Dynamic (learned) approvals
+  if (rules.dynamicApprovals && rules.dynamicApprovals.length > 0) {
+    html += '<div><div style="font-size:11px;font-weight:600;color:var(--yellow);text-transform:uppercase;margin-bottom:6px">Learned Rules</div>';
+    html += '<table style="width:100%;font-size:12px"><tbody>';
+    for (const r of rules.dynamicApprovals) {
+      html += '<tr><td style="padding:3px 8px 3px 0;color:var(--yellow);font-family:var(--mono);font-size:11px">' + esc(r.command) + '</td><td style="padding:3px 0;color:var(--muted);font-size:11px">' + esc(r.learnedDate) + ' (' + r.occurrences + 'x)</td></tr>';
+    }
+    html += '</tbody></table></div>';
+  }
+
+  html += '<div style="margin-top:12px;padding:8px 10px;background:var(--surface2);border-radius:4px;font-size:11px;color:var(--muted);line-height:1.5">'
+    + 'Read-only view. Edit rules directly in:<br>'
+    + '<span style="font-family:var(--mono);color:var(--accent)">.claude/hooks/pre-tool-use.sh</span> — approve/deny patterns<br>'
+    + '<span style="font-family:var(--mono);color:var(--accent)">.claude/rules/supervisor-policy.md</span> — AI evaluator policy<br>'
+    + '<span style="font-family:var(--mono);color:var(--yellow)">hooks/dynamic-approvals.sh</span> — auto-generated from eval history'
+    + '</div>';
+
+  el.innerHTML = html;
+}
+
+function renderOllamaConfig() {
+  const oh = window._ollamaHealth;
+  const cfg = window._evalConfig || {};
+  const el = document.getElementById('ollamaConfigContent');
+  const badge = document.getElementById('ollamaStatusBadge');
+  if (!el) return;
+
+  if (badge) {
+    if (oh && oh.status === 'ok') {
+      badge.textContent = 'OK'; badge.style.background = '#1a3a2a'; badge.style.color = 'var(--green)';
+    } else if (oh && oh.status === 'down') {
+      badge.textContent = 'DOWN'; badge.style.background = '#3a1a1a'; badge.style.color = 'var(--red)';
+    } else {
+      badge.textContent = '--'; badge.style.background = ''; badge.style.color = '';
+    }
+  }
+
+  const inputStyle = 'background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:3px 6px;font-size:12px;font-family:var(--mono);width:100%';
+  const selectStyle = inputStyle + ';cursor:pointer';
+  const labelStyle = 'padding:5px 0;color:var(--muted);font-size:12px;white-space:nowrap;vertical-align:middle';
+  const cellStyle = 'padding:3px 0;vertical-align:middle';
+
+  let html = '<table style="width:100%;font-size:12px"><tbody>';
+
+  // Mode selector
+  html += '<tr><td style="' + labelStyle + '">Mode</td><td style="' + cellStyle + '">';
+  html += '<select id="cfgMode" style="' + selectStyle + '" onchange="updateEvalConfig(\'mode\', this.value)">';
+  for (const m of ['auto', 'manual', 'off']) {
+    html += '<option value="' + m + '"' + (cfg.mode === m ? ' selected' : '') + '>' + m + '</option>';
+  }
+  html += '</select></td></tr>';
+
+  // Eval backend
+  html += '<tr><td style="' + labelStyle + '">Eval backend</td><td style="' + cellStyle + '">';
+  html += '<select id="cfgBackend" style="' + selectStyle + '" onchange="updateEvalConfig(\'evalBackend\', this.value)">';
+  for (const b of ['ollama', 'claude']) {
+    html += '<option value="' + b + '"' + (cfg.evalBackend === b ? ' selected' : '') + '>' + b + '</option>';
+  }
+  html += '</select></td></tr>';
+
+  // Confidence threshold (slider + value)
+  const thresh = cfg.confidenceThreshold || 0.8;
+  html += '<tr><td style="' + labelStyle + '">Confidence</td><td style="' + cellStyle + ';display:flex;align-items:center;gap:6px">';
+  html += '<input type="range" id="cfgThreshold" min="0.5" max="1" step="0.05" value="' + thresh + '" style="flex:1;accent-color:var(--accent)" oninput="document.getElementById(\'cfgThreshVal\').textContent=Math.round(this.value*100)+\'%\'" onchange="updateEvalConfig(\'confidenceThreshold\', parseFloat(this.value))">';
+  html += '<span id="cfgThreshVal" style="font-family:var(--mono);color:var(--accent);min-width:32px;text-align:right">' + Math.round(thresh * 100) + '%</span>';
+  html += '</td></tr>';
+
+  // Max concurrent
+  html += '<tr><td style="' + labelStyle + '">Max concurrent</td><td style="' + cellStyle + '">';
+  html += '<input type="number" id="cfgMaxConcurrent" min="1" max="20" value="' + (cfg.maxConcurrent || 3) + '" style="' + inputStyle + ';width:60px" onchange="updateEvalConfig(\'maxConcurrent\', parseInt(this.value))">';
+  html += '</td></tr>';
+
+  // Eval timeout
+  const timeoutSec = Math.round((cfg.evalTimeout || 60000) / 1000);
+  html += '<tr><td style="' + labelStyle + '">Eval timeout</td><td style="' + cellStyle + ';display:flex;align-items:center;gap:4px">';
+  html += '<input type="number" id="cfgTimeout" min="5" max="300" value="' + timeoutSec + '" style="' + inputStyle + ';width:60px" onchange="updateEvalConfig(\'evalTimeout\', parseInt(this.value) * 1000)">';
+  html += '<span style="color:var(--muted);font-size:11px">sec</span>';
+  html += '</td></tr>';
+
+  // Ollama URL
+  html += '<tr><td style="' + labelStyle + '">Ollama URL</td><td style="' + cellStyle + '">';
+  html += '<input type="text" id="cfgOllamaUrl" value="' + esc(cfg.ollamaUrl || 'http://localhost:11434') + '" style="' + inputStyle + '" onchange="updateEvalConfig(\'ollamaUrl\', this.value)">';
+  html += '</td></tr>';
+
+  // Ollama model
+  html += '<tr><td style="' + labelStyle + '">Default model</td><td style="' + cellStyle + '">';
+  html += '<input type="text" id="cfgOllamaModel" value="' + esc(cfg.ollamaModel || 'mistral-nemo') + '" style="' + inputStyle + '" onchange="updateEvalConfig(\'ollamaModel\', this.value)">';
+  html += '</td></tr>';
+
+  html += '</tbody></table>';
+
+  // Live status section (read-only monitoring below the controls)
+  if (oh && oh.status === 'ok') {
+    html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">';
+    html += '<div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Live Status</div>';
+    html += '<table style="width:100%;font-size:12px"><tbody>';
+    const models = (oh.models || []).map(m => {
+      const name = esc(m.name.replace(/:latest$/, ''));
+      const gb = (m.sizeVram / (1024*1024*1024)).toFixed(1);
+      return name + ' <span style="color:var(--muted)">(' + m.paramSize + ', ' + gb + 'G)</span>';
+    }).join('<br>');
+    html += '<tr><td style="padding:3px 0;color:var(--muted);font-size:11px">Loaded</td><td style="padding:3px 0;font-size:11px">' + (models || 'none') + '</td></tr>';
+    if (oh.vramUsed > 0) {
+      html += '<tr><td style="padding:3px 0;color:var(--muted);font-size:11px">VRAM</td><td style="padding:3px 0;font-size:11px">' + (oh.vramUsed / (1024*1024*1024)).toFixed(1) + ' GB</td></tr>';
+    }
+    const busy = (oh.activeEvals || 0) + (oh.queuedEvals || 0);
+    const max = oh.maxConcurrent || cfg.maxConcurrent || 3;
+    const qColor = busy === 0 ? 'var(--green)' : busy <= max ? 'var(--yellow)' : 'var(--red)';
+    html += '<tr><td style="padding:3px 0;color:var(--muted);font-size:11px">Queue</td><td style="padding:3px 0;font-size:11px"><span style="color:' + qColor + ';font-weight:600">' + (oh.activeEvals || 0) + ' active, ' + (oh.queuedEvals || 0) + ' queued</span></td></tr>';
+    html += '</tbody></table></div>';
+  } else if (oh && oh.status === 'down') {
+    html += '<div style="margin-top:10px;padding:8px;background:#3a1a1a;border-radius:4px;font-size:12px;color:var(--red);font-weight:600">Ollama unreachable at ' + esc(cfg.ollamaUrl || '') + '</div>';
+  }
+
+  // Fallback chain
+  html += '<div style="margin-top:10px;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Eval Fallback Chain</div>';
+  html += '<div style="font-size:11px;color:var(--muted);line-height:1.6;font-family:var(--mono)">';
+  html += '<span style="color:var(--green)">1.</span> Ollama <span style="color:var(--muted)">(' + timeoutSec + 's timeout)</span><br>';
+  html += '<span style="color:var(--yellow)">2.</span> Haiku proxy <span style="color:var(--muted)">localhost:11436 (30s timeout)</span><br>';
+  html += '<span style="color:var(--red)">3.</span> Risk-based <span style="color:var(--muted)">— reads approved, writes denied</span>';
+  html += '</div>';
+
+  // API proxy info
+  html += '<div style="margin-top:10px;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;margin-bottom:4px">API Proxy</div>';
+  html += '<div style="font-size:11px;color:var(--muted);line-height:1.6">';
+  html += '<span style="font-family:var(--mono);color:var(--accent)">localhost:3847/v1/*</span> — pass-through to Anthropic<br>';
+  html += 'Set <span style="font-family:var(--mono)">ANTHROPIC_BASE_URL=http://localhost:3847</span> to route through PII scrubbing';
+  html += '</div>';
+
+  el.innerHTML = html;
+}
+
+function updateEvalConfig(key, value) {
+  const body = {};
+  body[key] = value;
+  fetch('/api/eval-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(r => r.json()).then(cfg => {
+    window._evalConfig = cfg;
+    // Update globals that the status bar uses
+    if (cfg.confidenceThreshold !== undefined) window._confidenceThreshold = cfg.confidenceThreshold;
+    if (cfg.mode) {
+      const m = document.getElementById('supervisorMode');
+      if (m) { m.textContent = cfg.mode; m.className = 'mode-label ' + cfg.mode; }
+    }
+    if (cfg.evalBackend || cfg.ollamaModel) {
+      window._evalBackendLabel = cfg.evalBackend === 'ollama'
+        ? 'ollama (' + cfg.ollamaModel + ')'
+        : window._evalBackendLabel;
+    }
+    if (window._lastEvalStats) updateEvalStats(window._lastEvalStats, _serverStartedAt);
+  }).catch(err => console.error('Failed to update eval config:', err));
+}
+
 // Load config when panel is first opened — patch togglePanel behavior
 // Override for piiConfig panel to lazy-load data
 (function() {
@@ -4602,18 +5179,20 @@ async function savePiiConfig() {
     origToggle(name);
     if (name === 'piiConfig' && panelState.piiConfig) {
       fetchPiiConfig();
+      fetchPiiProjects();
       fetchPiiStats();
     }
   };
 })();
 
-// Poll stats every 30s when panel is open
+// Poll stats and projects every 30s when panel is open
 setInterval(() => {
-  if (panelState.piiConfig) fetchPiiStats();
+  if (panelState.piiConfig) { fetchPiiStats(); fetchPiiProjects(); }
 }, 30000);
 
-// Always fetch PII config on page load (for badge + initial state)
+// Always fetch PII config and projects on page load (for badge + initial state)
 fetchPiiConfig();
+fetchPiiProjects();
 
 connect();
 </script>
