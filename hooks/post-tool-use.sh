@@ -66,6 +66,27 @@ print(json.dumps({'percent': -1, 'message': 'Running: ' + sys.argv[1][:150]}, en
 import json, sys
 print(json.dumps({'percent': -1, 'message': 'Editing: ' + sys.argv[1]}, ensure_ascii=False))
 " "$FILE_PATH")" 2>/dev/null || true
+    # Silent-write detector: verify the file actually landed.
+    # Sandbox can silently reject writes while tool reports success (see debate verdict 2026-05-12).
+    if [ -n "$FILE_PATH" ] && [ "$TOOL_NAME" = "Write" ]; then
+      if [ ! -f "$FILE_PATH" ]; then
+        sv pub discovery "WRITE-FAILED-SILENT $FILE_PATH" 2>/dev/null || true
+        mosquitto_pub -h "$MQTT_HOST" -r \
+          -t "supervisor/$PROJECT/write-failures" \
+          -m "$(python3 -c "
+import json, sys, os, subprocess, time
+path = sys.argv[1]
+try:
+  existing = subprocess.run(['mosquitto_sub','-h',os.environ.get('MQTT_HOST','localhost'),'-t',sys.argv[2],'-C','1','-W','1'],capture_output=True,text=True,timeout=2).stdout.strip()
+  arr = json.loads(existing) if existing else []
+except Exception:
+  arr = []
+arr.append({'path': path, 'ts': time.time()})
+arr = arr[-10:]
+print(json.dumps(arr))
+" "$FILE_PATH" "supervisor/$PROJECT/write-failures")" 2>/dev/null || true
+      fi
+    fi
     ;;
   Task|Agent)
     TASK_DESC=$(echo "$TOOL_INPUT" | jq -r '.description // ""' | head -c 200)

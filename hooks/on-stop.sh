@@ -14,6 +14,7 @@ _sv_auth_header() {
 
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"')
+SESSION_ID="${SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-unknown}}"
 PROJECT=$(basename "${CLAUDE_PROJECT_DIR:-$PWD}")
 export SV_PROJECT="${SV_PROJECT:-$PROJECT}"
 

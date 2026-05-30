@@ -18,6 +18,7 @@ TASK_ID="${SV_TASK_ID:-agent}"
 
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"')
+SESSION_ID="${SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-unknown}}"
 ERROR_CODE=$(echo "$INPUT" | jq -r '.error.code // .error_code // ""')
 ERROR_MSG=$(echo "$INPUT" | jq -r '.error.message // .error_message // .message // "unknown error"')
 

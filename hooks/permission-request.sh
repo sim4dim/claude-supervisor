@@ -59,11 +59,14 @@ if [[ "$TOOL_NAME" =~ ^(Write|Edit|NotebookEdit)$ ]]; then
     exit 0
 fi
 
-# ─── AskUserQuestion: allow immediately, forward question data ────────────
+# ─── AskUserQuestion: POST question, block-poll for answer, return via updatedInput ───
 
 if [[ "$TOOL_NAME" == "AskUserQuestion" ]]; then
-    # Forward question data to supervisor for UI display and auto-answering
-    curl -s --max-time 5 \
+    # Plain-allow fallback (used on error or timeout)
+    PLAIN_ALLOW='{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
+
+    # POST to supervisor and capture the response (not discarded like before)
+    RESPONSE=$(curl -s --max-time 5 \
         -X POST "${SUPERVISOR_URL}/api/hook/question" \
         -H "Content-Type: application/json" \
         -H "$(_sv_auth_header)" \
@@ -72,11 +75,80 @@ if [[ "$TOOL_NAME" == "AskUserQuestion" ]]; then
             --argjson input "$TOOL_INPUT" \
             --arg project "$PROJECT" \
             '{session_id: $session, tool_input: $input, project: $project}'
-        )" >/dev/null 2>&1 || true
+        )" 2>/dev/null || echo '{}')
 
-    # Always allow — the terminal will render the question UI,
-    # and the server will inject keystrokes to answer
-    echo '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
+    QUESTION_ID=$(echo "$RESPONSE" | jq -r '.id // ""' 2>/dev/null || echo "")
+
+    # If no valid id, fail-open immediately (server unreachable or unexpected response)
+    if [[ -z "$QUESTION_ID" || "$QUESTION_ID" == "null" ]]; then
+        echo "$PLAIN_ALLOW"
+        exit 0
+    fi
+
+    # Block-poll for the answer — bounded by TIMEOUT (default 300s)
+    ELAPSED=0
+    POLL_INTERVAL=2
+    MAX_WAIT="${CLAUDE_SUPERVISOR_TIMEOUT:-300}"
+
+    while [[ $ELAPSED -lt $MAX_WAIT ]]; do
+        ANSWER_JSON=$(curl -s --max-time 5 \
+            -H "$(_sv_auth_header)" \
+            "${SUPERVISOR_URL}/api/hook/question/${QUESTION_ID}/answer" 2>/dev/null \
+            || echo '{}')
+
+        ANSWER_STATUS=$(echo "$ANSWER_JSON" | jq -r '.status // "pending"' 2>/dev/null || echo "pending")
+
+        case "$ANSWER_STATUS" in
+            completed)
+                # Build updatedInput: merge original tool_input with an answers map keyed by question text.
+                # The server returns: answers:[{questionIndex, optionIndex?|freeformText?}], questions:[{question,options:[{label}]}]
+                # NOTE: if PermissionRequest turns out not to honour updatedInput, move this block to a
+                # PreToolUse matcher on AskUserQuestion (variant 2) — the envelope structure is identical.
+                # Key the answers map off $input.questions — the SAME array we emit in updatedInput —
+                # so the answer key always matches the question text the tool reads (avoids any
+                # divergence vs the server's stored/PII-processed copy). $ans supplies only the indices.
+                UPDATED_INPUT=$(jq -nc \
+                    --argjson input "$TOOL_INPUT" \
+                    --argjson ans "$ANSWER_JSON" \
+                    '($ans.answers // []) as $as
+                    | ($as | map({
+                        key: ($input.questions[.questionIndex].question // ("q" + (.questionIndex | tostring))),
+                        value: (if .freeformText then .freeformText
+                                else ($input.questions[.questionIndex].options[.optionIndex].label // "")
+                                end)
+                      }) | from_entries) as $amap
+                    | $input + { answers: $amap }' 2>/dev/null || echo "$TOOL_INPUT")
+
+                # Emit updatedInput in BOTH placements: inside `decision` (matches the binary
+                # resolver reading H.behavior/H.updatedInput off one object) AND as a sibling of
+                # decision (the PreToolUse-style placement). Extra field is harmless; whichever the
+                # parser honours wins. If neither works, PermissionRequest ignores updatedInput → PreToolUse.
+                jq -n \
+                    --argjson updatedInput "$UPDATED_INPUT" \
+                    '{
+                      hookSpecificOutput: {
+                        hookEventName: "PermissionRequest",
+                        decision: { behavior: "allow", updatedInput: $updatedInput },
+                        updatedInput: $updatedInput
+                      }
+                    }'
+                exit 0
+                ;;
+            failed|not_found)
+                # Server-side failure — fail-open, no updatedInput
+                echo "$PLAIN_ALLOW"
+                exit 0
+                ;;
+            *)
+                # pending or transient error — keep polling
+                sleep "$POLL_INTERVAL"
+                ELAPSED=$((ELAPSED + POLL_INTERVAL))
+                ;;
+        esac
+    done
+
+    # Reached max wait — fail-open to avoid hanging the session
+    echo "$PLAIN_ALLOW"
     exit 0
 fi
 

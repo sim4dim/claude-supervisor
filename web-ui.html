@@ -2845,6 +2845,40 @@ function respond(id, approved) {
 /* ── Question handling ─────────────────────────────── */
 const questionQueue = new Map();
 let activeQuestionId = null;
+let questionCountdownTimer = null;
+// TODO: plumb SUPERVISOR_QUESTION_DELAY through the WS payload so this matches the server config
+const QUESTION_AI_DELAY_MS = 30000;
+
+function stopQuestionCountdown() {
+  if (questionCountdownTimer !== null) {
+    clearInterval(questionCountdownTimer);
+    questionCountdownTimer = null;
+  }
+}
+
+function startQuestionCountdown(question) {
+  stopQuestionCountdown();
+  const aiBtn = document.getElementById('questionAiBtn');
+  if (!aiBtn) return;
+  const createdAt = question.createdAt ? new Date(question.createdAt).getTime() : Date.now();
+  const deadline = createdAt + QUESTION_AI_DELAY_MS;
+
+  function tick() {
+    const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    if (!aiBtn || aiBtn.disabled) { stopQuestionCountdown(); return; }
+    if (remaining > 0) {
+      aiBtn.textContent = 'Let AI Decide (' + remaining + 's)';
+    } else {
+      aiBtn.textContent = 'AI is answering\u2026';
+      aiBtn.disabled = true;
+      // Disable option buttons so user can't race the AI
+      document.querySelectorAll('#questionBody .question-option').forEach(b => b.disabled = true);
+      stopQuestionCountdown();
+    }
+  }
+  tick();
+  questionCountdownTimer = setInterval(tick, 1000);
+}
 
 function playQuestionBell() {
   try {
@@ -2914,6 +2948,7 @@ function renderQuestion(question) {
   body.innerHTML = html;
   overlay.classList.add('open');
   if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+  startQuestionCountdown(question);
 }
 
 function selectQuestionOption(questionId, optionIndex) {
@@ -2961,6 +2996,7 @@ function submitQuestionAnswer(questionId, answers, answeredBy) {
 
 function letAIDecideQuestion() {
   if (activeQuestionId === null) return;
+  stopQuestionCountdown();
   const btn = document.getElementById('questionAiBtn');
   btn.disabled = true;
   btn.textContent = 'AI thinking...';
@@ -2974,6 +3010,7 @@ function dismissQuestion() {
 }
 
 function closeQuestionOverlay(questionId) {
+  stopQuestionCountdown();
   questionQueue.delete(questionId);
   activeQuestionId = null;
   document.getElementById('questionOverlay').classList.remove('open');

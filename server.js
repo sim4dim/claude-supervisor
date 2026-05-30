@@ -604,7 +604,6 @@ function checkClaudeCli() {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function mapSessionToTerminal(sessionId, project) {
   if (!sessionId || sessionId === "unknown") return;
@@ -1491,107 +1490,6 @@ async function triggerAIEvaluation(approvalId) {
   }
 }
 
-// ─── Question Handling Stubs ─────────────────────────────────────────────────
-
-async function injectQuestionAnswers(question) {
-  const terminal = terminals.get(question.terminalId);
-  if (!terminal || terminal.status !== "running") {
-    question.status = "failed";
-    log("warn", `Question #${question.id}: terminal not found or not running`, { project: question.project });
-    broadcast({ type: "question_failed", id: question.id, reason: "Terminal not available" });
-    return;
-  }
-
-  try {
-    for (let i = 0; i < question.answers.length; i++) {
-      const answer = question.answers[i];
-      const q = question.questions[i];
-
-      // Wait for the question UI to render in the terminal
-      await waitForQuestionRender(terminal, q, 4000);
-      await sleep(300);
-
-      if (answer.freeformText != null) {
-        // Navigate to "Other" option (after all predefined options)
-        const downPresses = (q.options || []).length;
-        for (let d = 0; d < downPresses; d++) {
-          terminal.pty.write("\x1b[B");
-          await sleep(60);
-        }
-        terminal.pty.write("\r");
-        await sleep(200);
-        terminal.pty.write(answer.freeformText);
-        await sleep(100);
-        terminal.pty.write("\r");
-      } else {
-        // Navigate to the chosen option index
-        const downPresses = answer.optionIndex || 0;
-        for (let d = 0; d < downPresses; d++) {
-          terminal.pty.write("\x1b[B");
-          await sleep(60);
-        }
-        terminal.pty.write("\r");
-      }
-
-      // Wait before next question
-      await sleep(400);
-    }
-
-    question.status = "completed";
-    log("ok", `Question #${question.id}: answered ${question.answers.length} question(s) via keystrokes`,
-      { project: question.project });
-    broadcast({ type: "question_completed", id: question.id });
-  } catch (err) {
-    question.status = "failed";
-    log("warn", `Question #${question.id}: injection failed: ${err.message}`,
-      { project: question.project });
-    broadcast({ type: "question_failed", id: question.id, reason: err.message });
-  }
-}
-
-function waitForQuestionRender(terminal, question, timeoutMs) {
-  return new Promise((resolve) => {
-    const searchText = (question.question || question.header || "").slice(0, 40);
-    if (!searchText) {
-      setTimeout(resolve, 1000);
-      return;
-    }
-
-    let resolved = false;
-    const finish = () => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timer);
-      if (disposable) disposable.dispose();
-    };
-
-    // Check recent scrollback first — question may have already rendered
-    const recent = terminal.scrollback.slice(-10).map(b => b.toString()).join("");
-    const plainRecent = recent.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-    if (plainRecent.includes(searchText)) {
-      resolve();
-      return;
-    }
-
-    // Watch for new terminal output containing the question text
-    let accumulated = "";
-    const disposable = terminal.pty.onData((data) => {
-      if (resolved) return;
-      accumulated += data;
-      const plain = accumulated.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-      if (plain.includes(searchText)) {
-        finish();
-        resolve();
-      }
-    });
-
-    const timer = setTimeout(() => {
-      finish();
-      resolve(); // Resolve anyway on timeout — question may have rendered before listener
-    }, timeoutMs);
-  });
-}
-
 async function evaluateQuestionWithAI(question) {
   return new Promise((resolveP, reject) => {
     const questionsText = question.questions.map((q, i) => {
@@ -2076,9 +1974,9 @@ app.post("/api/hook/question", (req, res) => {
             if (question.status !== "answering" && question.status !== "completed") {
               question.answers = answers;
               question.answeredBy = "ai";
-              question.status = "answering";
+              question.status = "completed";
               broadcast({ type: "question_ai_answered", id: question.id, answers });
-              return injectQuestionAnswers(question);
+              broadcast({ type: "question_completed", id: question.id });
             }
           })
           .catch(err => {
@@ -2090,6 +1988,20 @@ app.post("/api/hook/question", (req, res) => {
   }
 
   res.json({ id, ok: true });
+});
+
+app.get("/api/hook/question/:id/answer", (req, res) => {
+  const id = Number(req.params.id);
+  const question = pendingQuestions.get(id);
+
+  if (!question) return res.json({ status: "not_found" });
+  if (question.status === "failed") {
+    return res.json({ status: "failed", reason: question.failReason || "question failed" });
+  }
+  if (question.status === "completed") {
+    return res.json({ status: "completed", answers: question.answers, questions: question.questions });
+  }
+  return res.json({ status: "pending" });
 });
 
 // ─── Usage tracking from Claude Code statusLine hook ────────────────────────
@@ -2842,6 +2754,7 @@ app.post("/api/terminals/:id/restart", async (req, res) => {
     if (q.terminalId === id && q.status !== "completed" && q.status !== "failed") {
       if (q._aiTimer) { clearTimeout(q._aiTimer); q._aiTimer = null; }
       q.status = "failed";
+      q.failReason = "Terminal restarted";
       log("info", `Question #${qid} failed: terminal restarted`, { project: session.project });
       broadcast({ type: "question_failed", id: qid, reason: "Terminal restarted" });
     }
@@ -3316,6 +3229,7 @@ app.post("/api/pii/projects/:name/enable", (req, res) => {
   existing.mcpServers.pii = {
     command: "node",
     args: [join(__dirname, "mcp-pii-server.js")],
+    alwaysLoad: true,
     env: { PII_SESSION_ID: name }
   };
   try {
@@ -3819,11 +3733,11 @@ wss.on("connection", (ws) => {
           if (question._aiTimer) { clearTimeout(question._aiTimer); question._aiTimer = null; }
           question.answers = msg.answers;
           question.answeredBy = "human";
-          question.status = "answering";
+          question.status = "completed";
 
           log("info", `Question #${msg.questionId}: answered by human`, { project: question.project });
           broadcast({ type: "question_answered", id: msg.questionId, answers: msg.answers, answeredBy: "human" });
-          injectQuestionAnswers(question).catch(err => log("warn", "Question injection failed", { error: err.message }));
+          broadcast({ type: "question_completed", id: msg.questionId });
           break;
         }
 
@@ -3839,9 +3753,9 @@ wss.on("connection", (ws) => {
               if (question.status !== "answering" && question.status !== "completed") {
                 question.answers = answers;
                 question.answeredBy = "ai";
-                question.status = "answering";
+                question.status = "completed";
                 broadcast({ type: "question_ai_answered", id: msg.questionId, answers });
-                return injectQuestionAnswers(question);
+                broadcast({ type: "question_completed", id: msg.questionId });
               }
             })
             .catch(err => {
