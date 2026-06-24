@@ -582,6 +582,8 @@
     .question-ai-btn:hover { background:rgba(96,165,250,0.1) }
     .question-ai-btn:disabled { opacity:0.5; cursor:not-allowed }
     .question-skip-btn { padding:10px 16px; border:1px solid var(--muted); border-radius:10px; background:transparent; color:var(--muted); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit }
+    .question-talk-btn { padding:10px 16px; border:1px solid var(--yellow); border-radius:10px; background:transparent; color:var(--yellow); font-size:13px; font-weight:600; cursor:pointer; transition:all 0.15s; font-family:inherit }
+    .question-talk-btn:hover { background:rgba(250,204,21,0.1) }
     .question-proj-badge { font-size:11px; font-weight:600; padding:2px 8px; border-radius:8px; margin-left:8px; display:inline-block }
     .question-progress { margin-top:12px; font-size:11px; color:var(--muted); text-align:center }
 
@@ -1554,6 +1556,7 @@ body.lcars .dot.on { animation: lcars-pulse 2s ease-in-out infinite; }
     <div class="question-body" id="questionBody"></div>
     <div class="question-footer">
       <button class="question-ai-btn" id="questionAiBtn" onclick="letAIDecideQuestion()">Let AI Decide</button>
+      <button class="question-talk-btn" onclick="talkAboutQuestion()">Let's talk about it</button>
       <button class="question-skip-btn" onclick="dismissQuestion()">Dismiss</button>
     </div>
   </div>
@@ -2846,8 +2849,6 @@ function respond(id, approved) {
 const questionQueue = new Map();
 let activeQuestionId = null;
 let questionCountdownTimer = null;
-// TODO: plumb SUPERVISOR_QUESTION_DELAY through the WS payload so this matches the server config
-const QUESTION_AI_DELAY_MS = 30000;
 
 function stopQuestionCountdown() {
   if (questionCountdownTimer !== null) {
@@ -2861,7 +2862,7 @@ function startQuestionCountdown(question) {
   const aiBtn = document.getElementById('questionAiBtn');
   if (!aiBtn) return;
   const createdAt = question.createdAt ? new Date(question.createdAt).getTime() : Date.now();
-  const deadline = createdAt + QUESTION_AI_DELAY_MS;
+  const deadline = createdAt + (question.questionDelaySec || 300) * 1000;
 
   function tick() {
     const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
@@ -2948,7 +2949,7 @@ function renderQuestion(question) {
   body.innerHTML = html;
   overlay.classList.add('open');
   if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
-  startQuestionCountdown(question);
+  if (question.autoAnswer) startQuestionCountdown(question);
 }
 
 function selectQuestionOption(questionId, optionIndex) {
@@ -3007,6 +3008,14 @@ function letAIDecideQuestion() {
 
 function dismissQuestion() {
   if (activeQuestionId !== null) closeQuestionOverlay(activeQuestionId);
+}
+
+function talkAboutQuestion() {
+  if (activeQuestionId === null) return;
+  stopQuestionCountdown();
+  const question = questionQueue.get(activeQuestionId);
+  const qIdx = question ? (question.currentQuestionIndex || 0) : 0;
+  submitQuestionAnswer(activeQuestionId, [{ questionIndex: qIdx, freeformText: "Let's discuss this before you proceed — don't take action yet. Explain the tradeoffs and wait for my input." }], 'human');
 }
 
 function closeQuestionOverlay(questionId) {
@@ -4631,6 +4640,29 @@ function updateApprovalsBadge() {
     'c','cpp','h','hpp','env',
   ]);
 
+  const BINARY_DOC_EXTENSIONS = new Set([
+    'pdf','doc','docx','xls','xlsx','ppt','pptx','odt','ods','odp',
+  ]);
+
+  const BINARY_DOC_MIMES = new Set([
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.oasis.opendocument.text',
+    'application/vnd.oasis.opendocument.spreadsheet',
+    'application/vnd.oasis.opendocument.presentation',
+  ]);
+
+  function isBinaryDocFile(file) {
+    if (BINARY_DOC_EXTENSIONS.has(getExt(file.name))) return true;
+    if (file.type && BINARY_DOC_MIMES.has(file.type)) return true;
+    return false;
+  }
+
   function getExt(filename) {
     const m = (filename || '').match(/\.([^.]+)$/);
     return m ? m[1].toLowerCase() : '';
@@ -4683,10 +4715,38 @@ function updateApprovalsBadge() {
     reader.readAsDataURL(file);
   }
 
+  function sendBinaryDocFile(file) {
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) {
+      alert('Document too large (max 25MB)');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const base64 = e.target.result.split(',')[1]; // strip data:...;base64, prefix
+      const tab = activeTerminalId ? terminalTabs.get(activeTerminalId) : null;
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'file_drop',
+          terminalId: activeTerminalId,
+          project: tab ? tab.project : null,
+          filename: file.name,
+          data: base64,
+          encoding: 'base64',
+        }));
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
   function sendFile(file) {
     if (!file) return;
     if (file.type.startsWith('image/')) {
       sendImageFile(file);
+      return;
+    }
+    if (isBinaryDocFile(file)) {
+      sendBinaryDocFile(file);
       return;
     }
     if (!isTextFile(file)) {

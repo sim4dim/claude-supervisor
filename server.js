@@ -425,7 +425,10 @@ function getInstalledVersion() {
   try {
     const target = readlinkSync(CLAUDE_BINARY);
     const version = basename(target);
-    if (/^\d+\.\d+\.\d+/.test(version)) return version;
+    // readlinkSync succeeds even on a DANGLING symlink (the target binary may have
+    // been deleted), so it would otherwise report a phantom "installed" version.
+    // existsSync follows the link and returns false when the target is gone.
+    if (existsSync(CLAUDE_BINARY) && /^\d+\.\d+\.\d+/.test(version)) return version;
   } catch {}
   try {
     const out = execFileSync(CLAUDE_BINARY, ["--version"], {
@@ -1961,11 +1964,13 @@ app.post("/api/hook/question", (req, res) => {
 
   log("info", `Question #${id}: ${questions.length} question(s) from AskUserQuestion`,
     { project: question.project });
+  question.autoAnswer = process.env.SUPERVISOR_AUTO_ANSWER_QUESTIONS === "ai";
+  question.questionDelaySec = parseInt(process.env.SUPERVISOR_QUESTION_DELAY || "300");
   broadcast({ type: "question_request", question });
 
   // Auto-route to AI if configured, with delay for human override
   if (process.env.SUPERVISOR_AUTO_ANSWER_QUESTIONS === "ai") {
-    const delayMs = parseInt(process.env.SUPERVISOR_QUESTION_DELAY || "30") * 1000;
+    const delayMs = parseInt(process.env.SUPERVISOR_QUESTION_DELAY || "300") * 1000;
     question._aiTimer = setTimeout(() => {
       if (question.status !== "answering" && question.status !== "completed") {
         log("info", `Question #${id}: no human response after ${delayMs/1000}s, routing to AI`, { project: question.project });
@@ -3471,16 +3476,32 @@ app.post("/api/version/update", async (req, res) => {
 
   if (running.length > 0) await new Promise(r => setTimeout(r, 5000));
 
+  // `claude update` self-updates the binary, which only works if the binary still
+  // exists. A dangling symlink (target deleted) makes that throw ENOENT and there is
+  // nothing to self-update — so fall back to a from-scratch reinstall via the native
+  // installer, which rewrites ~/.local/bin/claude and the versions directory.
+  const binaryMissing = !existsSync(CLAUDE_BINARY);
+  const action = binaryMissing ? "reinstall" : "update";
   try {
-    const out = execFileSync(CLAUDE_BINARY, ["update"], {
-      env: { ...process.env, CLAUDECODE: "" },
-      timeout: 120000,
-      encoding: "utf-8",
-    });
-    log("info", `Claude update output: ${out.trim()}`);
+    let out;
+    if (binaryMissing) {
+      log("warn", `Claude binary missing at ${CLAUDE_BINARY} -- reinstalling from scratch instead of self-update`);
+      out = execFileSync("bash", ["-c", "curl -fsSL https://claude.ai/install.sh | bash"], {
+        env: { ...process.env, CLAUDECODE: "" },
+        timeout: 180000,
+        encoding: "utf-8",
+      });
+    } else {
+      out = execFileSync(CLAUDE_BINARY, ["update"], {
+        env: { ...process.env, CLAUDECODE: "" },
+        timeout: 120000,
+        encoding: "utf-8",
+      });
+    }
+    log("info", `Claude ${action} output: ${out.trim()}`);
   } catch (e) {
-    log("error", `Claude update failed: ${e.message}`);
-    return res.status(500).json({ error: "Update failed: " + e.message });
+    log("error", `Claude ${action} failed: ${e.message}`);
+    return res.status(500).json({ error: `${action[0].toUpperCase()}${action.slice(1)} failed: ` + e.message });
   }
 
   const newVersion = getInstalledVersion();
@@ -3863,8 +3884,11 @@ wss.on("connection", (ws) => {
         case "file_drop": {
           try {
             if (!msg.data || typeof msg.data !== "string") break;
-            if (msg.data.length > 1 * 1024 * 1024) {
-              ws.send(JSON.stringify({ type: "error", message: "Text file too large (max 1MB)" }));
+            const isBinaryEncoding = msg.encoding === "base64";
+            const maxSize = isBinaryEncoding ? 25 * 1024 * 1024 * 4 / 3 : 1 * 1024 * 1024;
+            const sizeLabel = isBinaryEncoding ? "Document too large (max 25MB)" : "Text file too large (max 1MB)";
+            if (msg.data.length > maxSize) {
+              ws.send(JSON.stringify({ type: "error", message: sizeLabel }));
               break;
             }
             const dropTerm = msg.terminalId ? terminals.get(msg.terminalId) : null;
@@ -3880,7 +3904,12 @@ wss.on("connection", (ws) => {
             const dropsDir = join(projectDir, "drops");
             mkdirSync(dropsDir, { recursive: true });
             const filePath = join(dropsDir, fileName);
-            writeFileSync(filePath, msg.data, "utf8");
+            if (isBinaryEncoding) {
+              const fileBuffer = Buffer.from(msg.data, "base64");
+              writeFileSync(filePath, fileBuffer);
+            } else {
+              writeFileSync(filePath, msg.data, "utf8");
+            }
             log("info", `File saved: ${filePath}`, { project: dropTerm.project });
             if (dropTerm.status === "running" && dropTerm.pty) {
               dropTerm.pty.write(filePath + " ");
