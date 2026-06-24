@@ -11,3 +11,10 @@ screenshots/
 !.claude/rules/
 *.log
 data/pii-custom-patterns.json
+
+# Private skills and security files — excluded from public mirror
+skills/centurion/
+skills/release-monitor/
+security/package-blocklist.txt
+scripts/release-check.sh
+scripts/setup-release-cron.sh
